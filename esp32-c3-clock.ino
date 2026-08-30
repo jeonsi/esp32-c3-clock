@@ -87,7 +87,7 @@ const char* password = WIFI_PASSWORD;
 // Brightness is mostly set by the pre-charge phase-2 length (0xD9 high
 // nibble, 1..15) and only fine-tuned by contrast; 0x11 + VCOMH 0 + contrast 0
 // is black on some panels, so start from these and adjust to taste.
-#define CONTRAST_NIGHT       0x20                 // 0x81: 0..255
+#define CONTRAST_NIGHT       0x80                 // 0x81: 0..255. On this panel 0x40 is barely visible, 0x80 a comfortable night level
 #define NIGHT_PRECHARGE      0x11                 // 0xD9: phase2<<4 | phase1, each 1..15 (init 0xF1)
 #define NIGHT_VCOMH          0x00                 // 0xDB: 0x00 / 0x20 / 0x30 (init 0x40)
 #define NIGHT_DITHER         0                    // 1: also light only every other pixel at night (checkerboard)
