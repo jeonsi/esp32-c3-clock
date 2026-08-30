@@ -10,7 +10,10 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
-    Screen (a 128x64 rendition of the CYD digital face, everything centred):
+    Two faces, cycled with the BOOT button (FACE_BUTTON_PIN, GPIO9 on most
+    ESP32-C3 dev boards) and remembered in NVS like the CYD clock:
+
+    Digital (a 128x64 rendition of the CYD digital face, everything centred):
 
         2026-08-30 (일)          DSEG7 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
@@ -22,8 +25,13 @@
                                  the numbers in the DSEG7 11px - and the solar
                                  term (inverted on the day it begins)
 
-      - Wi-Fi drops and SNTP syncs are only logged to Serial; the face
-        itself has no status marker
+    Analog: like the CYD analog face, one big dial and nothing else - 62 px
+      ring centred on the screen, 12 hour ticks, 12/3/6/9 numerals, tapered
+      hour and minute hands, a thin second hand. The minute hand creeps
+      0.1 degree per second and the hour hand 0.5 degree per minute.
+
+      - Wi-Fi drops and SNTP syncs are only logged to Serial; the faces
+        themselves have no status marker
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
         public holidays 2026-2030) is korean_calendar.h copied verbatim from
         the CYD clock; refresh it from there when the years run out
@@ -35,6 +43,8 @@
 
 #include <WiFi.h>
 #include <U8g2lib.h>
+#include <Preferences.h>
+#include <math.h>
 #include "time.h"
 #include "esp_sntp.h"
 #include "korean_calendar.h"
@@ -51,6 +61,8 @@ const char* password = WIFI_PASSWORD;
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
+#define FACE_BUTTON_PIN      9                    // BOOT button on most ESP32-C3 boards, active low; -1 = none
+#define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
@@ -76,11 +88,33 @@ const char* password = WIFI_PASSWORD;
 #define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
 #define PART_GAP     8                            // between bottom-line items
 #define SCREEN_W     128
+#define SCREEN_H     64
+
+// Analog face
+#define FONT_DIAL    u8g2_font_5x7_tf             // 12 / 3 / 6 / 9
+#define DIAL_CX      64
+#define DIAL_CY      32
+#define DIAL_R       31                           // outer ring
+#define TICK_R1      29                           // hour ticks, from..to
+#define TICK_R2      27
+#define NUM_R        21                           // centre of the numerals
+#define HOUR_LEN     14
+#define HOUR_HALF_W  2                            // half base width of the tapered hand
+#define MIN_LEN      21
+#define MIN_HALF_W   1
+#define SEC_LEN      25
+#define SEC_TAIL     5
+#define HUB_R        2
 
 // U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 const char* weekDaysKo[7] = { "일", "월", "화", "수", "목", "금", "토" };
+
+// ---- Faces ----------------------------------------------------------------
+enum face_t { FACE_DIGITAL, FACE_ANALOG, FACE_COUNT };
+static face_t      face_mode = FACE_DEFAULT;
+static Preferences prefs;
 
 // ---- Boot state machine ---------------------------------------------------
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
@@ -90,6 +124,33 @@ static uint32_t     wifi_attempt_ms;
 static int          wifi_attempts = 1;
 
 static int          last_drawn_sec = -1;
+
+static void set_face(face_t f) {
+  face_mode = f;
+  prefs.putInt("face", (int)f);        // only called on change, so no NVS wear worry
+  last_drawn_sec = -1;                 // redraw now
+  Serial.printf("Face: %s\n", f == FACE_ANALOG ? "analog" : "digital");
+}
+
+// BOOT button: cycle faces on each press (40 ms debounce, acts on press).
+static void button_poll(void) {
+#if FACE_BUTTON_PIN >= 0
+  static int      last_level = HIGH;
+  static uint32_t t_change   = 0;
+  static bool     handled    = false;
+  int level = digitalRead(FACE_BUTTON_PIN);
+  if (level != last_level) {
+    last_level = level;
+    t_change = millis();
+  } else if (millis() - t_change > 40) {
+    if (level == LOW && !handled) {
+      handled = true;
+      set_face((face_t)((face_mode + 1) % FACE_COUNT));
+    }
+    if (level == HIGH) handled = false;
+  }
+#endif
+}
 
 // ---- Per-day calendar info (lunar date, solar term, red day, event) -------
 // Recomputed only when the date changes; the lookups are table scans.
@@ -376,11 +437,67 @@ static void draw_clock(const struct tm & t) {
   u8g2.sendBuffer();
 }
 
+// ---- Analog face ----------------------------------------------------------
+// Polar helper: angle in degrees clockwise from 12 o'clock.
+static void polar(float deg, float r, int & x, int & y) {
+  float a = deg * (float)M_PI / 180.0f;
+  x = DIAL_CX + (int)lroundf(r * sinf(a));
+  y = DIAL_CY - (int)lroundf(r * cosf(a));
+}
+
+// Tapered hand: a triangle from a short base across the hub to the tip.
+static void draw_hand(float deg, int len, int half_w) {
+  float a  = deg * (float)M_PI / 180.0f;
+  float px = cosf(a), py = sinf(a);          // unit vector perpendicular to the hand
+  int tx, ty; polar(deg, len, tx, ty);
+  u8g2.drawTriangle(DIAL_CX + (int)lroundf(px * half_w), DIAL_CY + (int)lroundf(py * half_w),
+                    DIAL_CX - (int)lroundf(px * half_w), DIAL_CY - (int)lroundf(py * half_w),
+                    tx, ty);
+}
+
+static void draw_analog(const struct tm & t) {
+  int x, y, x2, y2;
+  u8g2.clearBuffer();
+
+  u8g2.drawCircle(DIAL_CX, DIAL_CY, DIAL_R);
+  for (int i = 0; i < 12; i++) {
+    polar(i * 30.0f, TICK_R1, x, y);
+    polar(i * 30.0f, TICK_R2, x2, y2);
+    u8g2.drawLine(x, y, x2, y2);
+  }
+  u8g2.setFont(FONT_DIAL);
+  static const char* const nums[4] = { "12", "3", "6", "9" };
+  for (int i = 0; i < 4; i++) {
+    polar(i * 90.0f, NUM_R, x, y);
+    int w = u8g2.getStrWidth(nums[i]);
+    u8g2.drawStr(x - w / 2, y + 3, nums[i]);   // 5x7: cap height 7 -> centre on y
+  }
+
+  float sec_deg  = t.tm_sec * 6.0f;
+  float min_deg  = (t.tm_min + t.tm_sec / 60.0f) * 6.0f;
+  float hour_deg = ((t.tm_hour % 12) + t.tm_min / 60.0f) * 30.0f;
+  draw_hand(hour_deg, HOUR_LEN, HOUR_HALF_W);
+  draw_hand(min_deg,  MIN_LEN,  MIN_HALF_W);
+  polar(sec_deg, SEC_LEN, x, y);
+  polar(sec_deg + 180.0f, SEC_TAIL, x2, y2);
+  u8g2.drawLine(x2, y2, x, y);
+  u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
+
+  u8g2.sendBuffer();
+}
+
 void setup() {
   Serial.begin(115200);
   u8g2.begin();
   oled_clear_ram();
   draw_status("Connecting to Wi-Fi...", "");
+
+#if FACE_BUTTON_PIN >= 0
+  pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);
+#endif
+  prefs.begin("clock", false);
+  int f = prefs.getInt("face", (int)FACE_DEFAULT);
+  face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
@@ -389,6 +506,8 @@ void setup() {
 }
 
 void loop() {
+  button_poll();
+
   if (boot_state != BOOT_DONE) {
     boot_poll();
     delay(50);
@@ -402,7 +521,8 @@ void loop() {
   localtime_r(&now, &t);
   if (t.tm_sec != last_drawn_sec) {
     last_drawn_sec = t.tm_sec;
-    draw_clock(t);
+    if (face_mode == FACE_ANALOG) draw_analog(t);
+    else                          draw_clock(t);
   }
   delay(50);
 }
