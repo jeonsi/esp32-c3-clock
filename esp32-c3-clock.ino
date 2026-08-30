@@ -10,9 +10,10 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
-    Two faces, cycled with a short press of the BOOT button; a long press
-    (1 s) toggles night dimming on/off with a 2 s banner. Both settings are
-    remembered in NVS like the CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
+    BOOT button: a short press cycles the faces, a double click switches
+    12/24-hour time, a long press (1 s) toggles night dimming; each change
+    shows a 2 s banner. All three settings are remembered in NVS like the
+    CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
     SCL (default Wire pins are SDA 8 / SCL 9), so the pin is never
     reconfigured with pinMode() - that freezes the display. It is only
     sampled with digitalRead() between frames, when the bus is idle and the
@@ -25,7 +26,7 @@
 
         2026-08-30 (일)          DSEG7 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
-                        PM       DSEG14 11px (TIME_12H)
+                        PM       DSEG14 11px (12-hour mode only)
         11:58           ──       DSEG7 Bold 28px HH:MM
                         42       DSEG7 11px seconds
         추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
@@ -76,11 +77,12 @@ const char* password = WIFI_PASSWORD;
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
-#define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
+#define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
 #define LONG_PRESS_MS        1000                 // hold this long to toggle night mode instead of the face
+#define DOUBLE_CLICK_MS      400                  // second click within this = toggle 12/24 h (single click acts after it)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
 
@@ -190,7 +192,14 @@ static void button_poll(void) {
   static uint32_t t_change   = 0;
   static bool     seen_high  = false;         // fail-safe: a pin stuck low (miswired, no pull-up) is ignored
   static uint32_t press_ms   = 0;             // when the confirmed press began
+  static bool     click_pending = false;      // one short click seen, waiting for a possible second
+  static uint32_t click_ms   = 0;
   int level = digitalRead(FACE_BUTTON_PIN);
+  // A lone short click acts once the double-click window has closed.
+  if (click_pending && !button_down && millis() - click_ms > DOUBLE_CLICK_MS) {
+    click_pending = false;
+    next_face(true);
+  }
   if (level == HIGH) seen_high = true;
   if (level != last_level) {
     last_level = level;
@@ -207,8 +216,16 @@ static void button_poll(void) {
     }
   } else if (button_down) {
     button_down = false;                      // confirmed release: t_change is the release time
-    if (t_change - press_ms >= LONG_PRESS_MS) toggle_night();
-    else                                      next_face(true);
+    if (t_change - press_ms >= LONG_PRESS_MS) {
+      click_pending = false;
+      toggle_night();
+    } else if (click_pending && t_change - click_ms <= DOUBLE_CLICK_MS) {
+      click_pending = false;                  // second click: 12/24 h
+      toggle_12h();
+    } else {
+      click_pending = true;                   // first click: wait for a second one
+      click_ms = t_change;
+    }
   }
 #endif
 }
@@ -282,15 +299,27 @@ static bool is_night(int hour) {
 
 static bool     night_now     = false;
 static bool     night_enabled = NIGHT_ENABLE_DEFAULT;
+static bool     time_12h      = TIME_12H_DEFAULT;
 static uint32_t msg_until_ms  = 0;          // banner visible while millis() < this
 static const char* msg_text   = nullptr;
+
+static void show_banner(const char* text) {
+  msg_text = text;
+  msg_until_ms = millis() + MSG_MS;
+  last_drawn_sec = -1;                      // redraw now
+}
+
+static void toggle_12h(void) {
+  time_12h = !time_12h;
+  prefs.putInt("h12", time_12h ? 1 : 0);
+  show_banner(time_12h ? "12시간제" : "24시간제");
+  Serial.printf("Time format: %s\n", time_12h ? "12h" : "24h");
+}
 
 static void toggle_night(void) {
   night_enabled = !night_enabled;
   prefs.putInt("night", night_enabled ? 1 : 0);
-  msg_text = night_enabled ? "야간 모드 켜짐" : "야간 모드 꺼짐";
-  msg_until_ms = millis() + MSG_MS;
-  last_drawn_sec = -1;                      // redraw (and re-apply brightness) now
+  show_banner(night_enabled ? "야간 모드 켜짐" : "야간 모드 꺼짐");   // also re-applies brightness
   Serial.printf("Night mode: %s\n", night_enabled ? "on" : "off");
 }
 
@@ -482,14 +511,14 @@ static void draw_clock(const struct tm & t) {
   draw_str_hl(x + date_w + DATE_GAP, DATE_Y, wdStr, day_info.red_day);
 
   // ---- Row 2: HH:MM big, AM/PM over seconds in a narrow column, all centred
-#if TIME_12H
-  int hh = t.tm_hour % 12;
-  if (hh == 0) hh = 12;
-  snprintf(timeStr, sizeof(timeStr), "%2d:%02d", hh, t.tm_min);   // leading blank = one digit wide
   const char* ampm = t.tm_hour < 12 ? "AM" : "PM";
-#else
-  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", t.tm_hour, t.tm_min);
-#endif
+  if (time_12h) {
+    int hh = t.tm_hour % 12;
+    if (hh == 0) hh = 12;
+    snprintf(timeStr, sizeof(timeStr), "%2d:%02d", hh, t.tm_min);   // leading blank = one digit wide
+  } else {
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d", t.tm_hour, t.tm_min);
+  }
   snprintf(secStr, sizeof(secStr), "%02d", t.tm_sec);
 
   u8g2.setFont(FONT_TIME);
@@ -500,25 +529,25 @@ static void draw_clock(const struct tm & t) {
   // bearing and draw the string that much further left, so the blank part
   // of the leading cell hangs outside the field and nothing looks pushed right.
   int lead_blank = 0;
-#if TIME_12H
-  lead_blank = u8g2_GetXOffsetGlyph(u8g2.getU8g2(), '1');
-  time_w -= lead_blank;
-#endif
+  if (time_12h) {
+    lead_blank = u8g2_GetXOffsetGlyph(u8g2.getU8g2(), '1');
+    time_w -= lead_blank;
+  }
   u8g2.setFont(FONT_SEC);
   int col_w = adv_width(secStr);
-#if TIME_12H
-  u8g2.setFont(FONT_AMPM);
-  int ampm_w = adv_width(ampm);
-  if (ampm_w > col_w) col_w = ampm_w;
-#endif
+  if (time_12h) {
+    u8g2.setFont(FONT_AMPM);
+    int ampm_w = adv_width(ampm);
+    if (ampm_w > col_w) col_w = ampm_w;
+  }
   x = (SCREEN_W - (time_w + COL_GAP + col_w)) / 2;
   u8g2.setFont(FONT_TIME);
   u8g2.drawStr(x - lead_blank, TIME_Y, timeStr);
   int col_x = x + time_w + COL_GAP;
-#if TIME_12H
-  u8g2.setFont(FONT_AMPM);
-  u8g2.drawStr(col_x, AMPM_Y, ampm);
-#endif
+  if (time_12h) {
+    u8g2.setFont(FONT_AMPM);
+    u8g2.drawStr(col_x, AMPM_Y, ampm);
+  }
   u8g2.drawHLine(col_x, SEP_Y, col_w);
   u8g2.setFont(FONT_SEC);
   u8g2.drawStr(col_x, SEC_Y, secStr);
@@ -652,7 +681,8 @@ void setup() {
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
   face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
   night_enabled = prefs.getInt("night", NIGHT_ENABLE_DEFAULT) != 0;
-  Serial.printf("Night mode: %s\n", night_enabled ? "on" : "off");
+  time_12h      = prefs.getInt("h12", TIME_12H_DEFAULT) != 0;
+  Serial.printf("Night mode: %s, time format: %s\n", night_enabled ? "on" : "off", time_12h ? "12h" : "24h");
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
