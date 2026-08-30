@@ -10,10 +10,14 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
-    Two faces, cycled with a push button (FACE_BUTTON_PIN -> GND) and
-    remembered in NVS like the CYD clock. NOTE: the BOOT button (GPIO9) is
-    the OLED's SCL on the ESP32-C3 (default Wire pins are SDA 8 / SCL 9),
-    so it cannot be used - wire a separate button, or set FACE_CYCLE_S to
+    Two faces, cycled with the BOOT button and remembered in NVS like the
+    CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
+    SCL (default Wire pins are SDA 8 / SCL 9), so the pin is never
+    reconfigured with pinMode() - that freezes the display. It is only
+    sampled with digitalRead() between frames, when the bus is idle and the
+    line sits high; a press pulls it low. Nothing is sent to the OLED while
+    the button is held, and the face changes on release. FACE_BUTTON_PIN can
+    also be a separate button to GND on any free pin, or FACE_CYCLE_S can
     alternate the faces automatically.
 
     Digital (a 128x64 rendition of the CYD digital face, everything centred):
@@ -64,13 +68,10 @@ const char* password = WIFI_PASSWORD;
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
-#define FACE_BUTTON_PIN      4                    // push button to GND (INPUT_PULLUP); -1 = none. NOT 8/9: I2C!
+#define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
-
-#if FACE_BUTTON_PIN == 8 || FACE_BUTTON_PIN == 9
-#error "FACE_BUTTON_PIN 8/9 are the ESP32-C3 default I2C pins (the OLED) - pinMode() on them freezes the display"
-#endif
+#define BUTTON_SHARES_I2C    (FACE_BUTTON_PIN == SDA || FACE_BUTTON_PIN == SCL)
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
@@ -144,7 +145,13 @@ static void next_face(bool save) {
   set_face((face_t)((face_mode + 1) % FACE_COUNT), save);
 }
 
-// Push button: cycle faces on each press (40 ms debounce, acts on press).
+// Push button: cycle faces on each press. A level must hold for 40 ms (two
+// 50 ms polls) to count, and the face changes on RELEASE, so that when the
+// button shares the I2C clock line the redraw goes out on a free bus.
+// button_down is true while a confirmed press is held; loop() sends nothing
+// to the OLED during that time.
+static bool button_down = false;
+
 // Optional auto cycle every FACE_CYCLE_S seconds for boards without a button.
 static void button_poll(void) {
 #if FACE_CYCLE_S > 0
@@ -157,17 +164,18 @@ static void button_poll(void) {
 #if FACE_BUTTON_PIN >= 0
   static int      last_level = HIGH;
   static uint32_t t_change   = 0;
-  static bool     handled    = false;
   int level = digitalRead(FACE_BUTTON_PIN);
   if (level != last_level) {
     last_level = level;
     t_change = millis();
-  } else if (millis() - t_change > 40) {
-    if (level == LOW && !handled) {
-      handled = true;
-      next_face(true);
-    }
-    if (level == HIGH) handled = false;
+    return;
+  }
+  if (millis() - t_change < 40) return;
+  if (level == LOW) {
+    button_down = true;                       // confirmed press
+  } else if (button_down) {
+    button_down = false;                      // confirmed release
+    next_face(true);
   }
 #endif
 }
@@ -512,8 +520,8 @@ void setup() {
   oled_clear_ram();
   draw_status("Connecting to Wi-Fi...", "");
 
-#if FACE_BUTTON_PIN >= 0
-  pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);
+#if FACE_BUTTON_PIN >= 0 && !BUTTON_SHARES_I2C
+  pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);   // an I2C pin is already input-enabled and pulled up; pinMode() would break the bus
 #endif
   prefs.begin("clock", false);
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
@@ -527,6 +535,10 @@ void setup() {
 
 void loop() {
   button_poll();
+  if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
+    delay(50);
+    return;
+  }
 
   if (boot_state != BOOT_DONE) {
     boot_poll();
