@@ -37,6 +37,10 @@
       hour and minute hands, a thin second hand. The minute hand creeps
       0.1 degree per second and the hour hand 0.5 degree per minute.
 
+      - night dimming: between NIGHT_FROM_HOUR and NIGHT_TO_HOUR the panel
+        contrast drops to CONTRAST_NIGHT (there is no light sensor, so this
+        goes by the clock, unlike the CYD's LDR). Set CONTRAST_NIGHT to 0 and
+        NIGHT_OFF to 1 to switch the panel off completely at night instead.
       - Wi-Fi drops and SNTP syncs are only logged to Serial; the faces
         themselves have no status marker
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
@@ -71,6 +75,13 @@ const char* password = WIFI_PASSWORD;
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
+
+// Night dimming (by the clock; the C3 board has no light sensor)
+#define NIGHT_FROM_HOUR      22                   // dim from 22:00 ...
+#define NIGHT_TO_HOUR        7                    // ... until 07:00 (may wrap past midnight)
+#define CONTRAST_DAY         255                  // SH1106/SSD1306 contrast 0..255
+#define CONTRAST_NIGHT       8                    // dim, still readable in a dark room
+#define NIGHT_OFF            0                    // 1: turn the panel off at night instead of dimming
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
@@ -240,6 +251,27 @@ static void sntp_begin(void) {
   configTzTime(TZ_INFO, "kr.pool.ntp.org", "pool.ntp.org", "time.google.com");
   sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
   sntp_restart();                              // apply the new interval
+}
+
+// ---- Night dimming --------------------------------------------------------
+static bool is_night(int hour) {
+  if (NIGHT_FROM_HOUR == NIGHT_TO_HOUR) return false;
+  if (NIGHT_FROM_HOUR < NIGHT_TO_HOUR)  return hour >= NIGHT_FROM_HOUR && hour < NIGHT_TO_HOUR;
+  return hour >= NIGHT_FROM_HOUR || hour < NIGHT_TO_HOUR;       // wraps past midnight
+}
+
+// Called once per redraw; only talks to the panel when the state changes.
+static void apply_brightness(const struct tm & t) {
+  static int applied = -1;              // -1 = nothing sent yet
+  int want = is_night(t.tm_hour) ? 1 : 0;
+  if (want == applied) return;
+  applied = want;
+#if NIGHT_OFF
+  u8g2.setPowerSave(want);              // 1 = display off (RAM kept, redraws continue unseen)
+#else
+  u8g2.setContrast(want ? CONTRAST_NIGHT : CONTRAST_DAY);
+#endif
+  Serial.printf("Brightness: %s\n", want ? "night" : "day");
 }
 
 // ---- Drawing helpers ------------------------------------------------------
@@ -563,6 +595,7 @@ void loop() {
   localtime_r(&now, &t);
   if (t.tm_sec != last_drawn_sec) {
     last_drawn_sec = t.tm_sec;
+    apply_brightness(t);
     if (face_mode == FACE_ANALOG) draw_analog(t);
     else                          draw_clock(t);
   }
