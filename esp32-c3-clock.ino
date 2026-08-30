@@ -148,9 +148,29 @@ static void sntp_begin(void) {
 }
 
 // ---- Drawing helpers ------------------------------------------------------
+// Width of a (UTF-8) string as drawn: the sum of the glyph advances.
+// Not U8g2's getStrWidth / getUTF8Width: those are built with
+// U8G2_BALANCED_STR_WIDTH_CALCULATION, which adds the first glyph's left
+// bearing again on the right. DSEG's "1" is only its right-hand segments
+// (x offset 16), so "12:05" would report 111 px for 98 px of ink and push
+// the whole time block off the right edge.
+static int adv_width(const char* s) {
+  int w = 0;
+  while (*s) {
+    uint8_t c = (uint8_t)*s++;
+    uint16_t enc;
+    if (c < 0x80)              enc = c;
+    else if ((c & 0xE0) == 0xC0) { enc = (c & 0x1F) << 6;  enc |= (uint8_t)*s++ & 0x3F; }
+    else if ((c & 0xF0) == 0xE0) { enc = (c & 0x0F) << 12; enc |= ((uint8_t)*s++ & 0x3F) << 6; enc |= (uint8_t)*s++ & 0x3F; }
+    else { while (((uint8_t)*s & 0xC0) == 0x80) s++; continue; }   // 4-byte sequences: not in our fonts
+    w += u8g2_GetGlyphWidth(u8g2.getU8g2(), enc);
+  }
+  return w;
+}
+
 // Draw text with a filled box behind it and the glyphs cut out (mono "highlight").
 static void draw_str_inverted(int x, int y, const char* s) {
-  int w = u8g2.getUTF8Width(s);
+  int w = adv_width(s);
   int a = u8g2.getAscent();
   int d = u8g2.getDescent();    // negative
   u8g2.drawBox(x - 1, y - a - 1, w + 2, a - d + 2);
@@ -237,9 +257,9 @@ static void draw_clock(const struct tm & t) {
   snprintf(dateStr, sizeof(dateStr), "%d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
   snprintf(wdStr, sizeof(wdStr), "(%s)", weekDaysKo[t.tm_wday]);
   u8g2.setFont(FONT_DATE);
-  int date_w = u8g2.getStrWidth(dateStr);
+  int date_w = adv_width(dateStr);
   u8g2.setFont(FONT_KO);
-  int wd_w = u8g2.getUTF8Width(wdStr);
+  int wd_w = adv_width(wdStr);
   int x = (SCREEN_W - (date_w + DATE_GAP + wd_w)) / 2;
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x, DATE_Y, dateStr);
@@ -258,12 +278,12 @@ static void draw_clock(const struct tm & t) {
   snprintf(secStr, sizeof(secStr), "%02d", t.tm_sec);
 
   u8g2.setFont(FONT_TIME);
-  int time_w = u8g2.getStrWidth(timeStr);
+  int time_w = adv_width(timeStr);
   u8g2.setFont(FONT_SEC);
-  int col_w = u8g2.getStrWidth(secStr);
+  int col_w = adv_width(secStr);
 #if TIME_12H
   u8g2.setFont(FONT_AMPM);
-  int ampm_w = u8g2.getStrWidth(ampm);
+  int ampm_w = adv_width(ampm);
   if (ampm_w > col_w) col_w = ampm_w;
 #endif
   x = (SCREEN_W - (time_w + COL_GAP + col_w)) / 2;
@@ -283,9 +303,9 @@ static void draw_clock(const struct tm & t) {
   u8g2.setFont(FONT_KO);
   {
     const int W = SCREEN_W - 2;
-    int ev_w    = day_info.event    ? u8g2.getUTF8Width(day_info.event) : 0;
-    int lunar_w = day_info.lunar[0] ? u8g2.getUTF8Width(day_info.lunar) : 0;
-    int term_w  = day_info.term     ? u8g2.getUTF8Width(day_info.term)  : 0;
+    int ev_w    = day_info.event    ? adv_width(day_info.event) : 0;
+    int lunar_w = day_info.lunar[0] ? adv_width(day_info.lunar) : 0;
+    int term_w  = day_info.term     ? adv_width(day_info.term)  : 0;
     int ev_gap  = ev_w ? ev_w + PART_GAP : 0;
     bool show_term  = term_w  && ev_gap + lunar_w + (lunar_w ? PART_GAP : 0) + term_w <= W;
     bool show_lunar = lunar_w && ev_gap + lunar_w <= W;
