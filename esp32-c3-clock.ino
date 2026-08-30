@@ -9,20 +9,26 @@
         forever instead of hanging in a blind while() loop
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
-      - a small "*" is shown for a few seconds after every successful sync
 
-    Bottom line: Korean lunar date + current solar term (절기) + holiday name,
-    from the CYD clock's korean_calendar.h (tables are copied verbatim, so
-    refresh that file from the CYD project when the years run out).
-    USE_HANGUL selects the rendering:
-      1 (default): 굴림 12px Korean (u8g2_font_gulim12_t_korean2, ~60 KB flash)
-           "2026-08-30 일"            weekday inverted on Sunday / public holiday
-           "추석  음 8.15        추분"  [holiday(inverted) | festival] lunar  term
-      0: ASCII only, no extra font
-           "Sun 30 Aug 2026"
-           "L 7.11             Ipchu"  "L+" = leap month, term in Revised Romanization
-    In both modes the term is drawn inverted on the day it begins (CYD: green),
-    and red days (CYD: red weekday) become an inverted weekday.
+    Screen (a 128x64 rendition of the CYD digital face, everything centred):
+
+        2026-08-30 (일)          DSEG7 Italic 11px date + 굴림 12px weekday,
+                                 weekday inverted on Sunday / public holiday
+                        PM       DSEG14 Italic 10px (TIME_12H)
+        11:58           ──       DSEG7 Bold Italic 28px HH:MM
+                        42       DSEG7 Italic 11px seconds
+        추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
+                                 lunar date ("음 윤7.11" = leap month), solar
+                                 term (inverted on the day it begins)
+
+      - top-left corner: "!" while Wi-Fi is down, "*" for a few seconds
+        after every successful SNTP sync
+      - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
+        public holidays 2026-2030) is korean_calendar.h copied verbatim from
+        the CYD clock; refresh it from there when the years run out
+      - the DSEG fonts are generated from the TTFs by tools/gen_fonts.sh
+        (U8g2 format, ~700 bytes total); the Korean font is U8g2's built-in
+        u8g2_font_gulim12_t_korean2 (~60 KB; korean1 lacks 11 needed glyphs)
 */
 
 #include <WiFi.h>
@@ -30,6 +36,7 @@
 #include "time.h"
 #include "esp_sntp.h"
 #include "korean_calendar.h"
+#include "clock_fonts.h"
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -42,32 +49,33 @@ const char* password = WIFI_PASSWORD;
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define SYNC_MARK_MS         (5 * 1000)           // how long "*" stays after a sync
-#define USE_HANGUL           1                    // 1: Korean bottom line (gulim 12px), 0: ASCII only
+#define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
 
-#if USE_HANGUL
-#define FONT_KO   u8g2_font_gulim12_t_korean2     // 2446 KS X 1001 syllables (korean1 lacks 곡망백복윤춘충칩토헌휴)
-#define DATE_Y    12                              // baselines: 12px Korean line needs the extra room
-#define TIME_Y    49
-#define BOTTOM_Y  61
-#else
-#define DATE_Y    16
-#define TIME_Y    52
-#define BOTTOM_Y  62
-#endif
+// ---- Fonts / layout -------------------------------------------------------
+#define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
+#define FONT_DATE    font_dseg7_i_11              // 12px tall digits, "0-9" "-"
+#define FONT_TIME    font_dseg7_bi_28             // 29px tall digits, "0-9" ":" " "
+#define FONT_SEC     font_dseg7_i_11
+#define FONT_AMPM    font_dseg14_i_10             // "A" "M" "P"
+#define FONT_STATUS  u8g2_font_6x12_tf            // boot screen, "!" / "*"
+
+// Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
+// them holds the 29 px time centred (y 18..46).
+#define DATE_Y       12
+#define TIME_Y       47
+#define AMPM_Y       28                           // top of AM/PM aligned with the digits' top
+#define SEP_Y        31                           // rule between AM/PM and seconds
+#define SEC_Y        47                           // seconds bottom-aligned with the digits
+#define BOTTOM_Y     61
+#define DATE_GAP     4                            // date .. (weekday)
+#define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
+#define PART_GAP     8                            // between bottom-line items
+#define SCREEN_W     128
 
 // U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
-const char* weekDays[7]   = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 const char* weekDaysKo[7] = { "일", "월", "화", "수", "목", "금", "토" };
-const char* months[12]  = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-
-// Revised-Romanization names for TERM_KR[] (korean_calendar.h), same order.
-static const char* const TERM_ASCII[24] = {
-  "Sohan", "Daehan", "Ipchun", "Usu", "Gyeongchip", "Chunbun", "Cheongmyeong", "Gogu",
-  "Ipha", "Soman", "Mangjong", "Haji", "Soseo", "Daeseo", "Ipchu", "Cheoseo",
-  "Baengno", "Chubun", "Hanro", "Sanggang", "Ipdong", "Soseol", "Daeseol", "Dongji",
-};
 
 // ---- Boot state machine ---------------------------------------------------
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
@@ -79,16 +87,16 @@ static int          wifi_attempts = 1;
 static volatile uint32_t last_sync_ms = 0;   // millis() of the last SNTP sync (0 = never)
 static int               last_drawn_sec = -1;
 
-// ---- Per-day calendar info (lunar date, solar term, red day) --------------
+// ---- Per-day calendar info (lunar date, solar term, red day, event) -------
 // Recomputed only when the date changes; the lookups are table scans.
 static struct {
   int         yday  = -1;      // tm_yday of the cached day (-1 = none)
   int         year  = -1;
-  char        lunar[16];       // "음 7.11" / "음 윤7.11"  (ASCII: "L 7.11" / "L+7.11"), "" outside the table
-  const char* term  = nullptr; // term name (Korean or ASCII) or nullptr
+  char        lunar[16];       // "음 7.11" / "음 윤7.11", "" outside the table
+  const char* term  = nullptr; // solar term name or nullptr
   bool        term_today = false;
   bool        red_day    = false;
-  const char* event = nullptr; // holiday / festival name (Korean only) or nullptr
+  const char* event = nullptr; // holiday / festival name or nullptr
   bool        event_holiday = false;  // true: public holiday (inverted), false: festival (plain)
 } day_info;
 
@@ -100,31 +108,13 @@ static void update_day_info(const struct tm & t) {
   klc_date_t ld;
   bool have_lunar = klc_solar_to_lunar(&t, &ld);
   if (have_lunar) {
-#if USE_HANGUL
     snprintf(day_info.lunar, sizeof(day_info.lunar), "음 %s%d.%d",
              ld.leap ? "윤" : "", ld.month, ld.day);
-#else
-    snprintf(day_info.lunar, sizeof(day_info.lunar), "L%c%d.%d",
-             ld.leap ? '+' : ' ', ld.month, ld.day);
-#endif
   } else {
     day_info.lunar[0] = '\0';
   }
 
-  const char* kr = kst_current_term(&t, &day_info.term_today);
-#if USE_HANGUL
-  day_info.term = kr;
-#else
-  // kst_current_term() returns a pointer into TERM_KR[]; map it to the
-  // ASCII table by index so korean_calendar.h stays identical to the CYD copy.
-  day_info.term = nullptr;
-  if (kr) {
-    for (int i = 0; i < 24; i++) {
-      if (kr == TERM_KR[i]) { day_info.term = TERM_ASCII[i]; break; }
-    }
-  }
-#endif
-
+  day_info.term    = kst_current_term(&t, &day_info.term_today);
   day_info.red_day = kr_is_red_day(&t);
 
   // Holiday name first (inverted), otherwise a seasonal festival (plain).
@@ -136,22 +126,6 @@ static void update_day_info(const struct tm & t) {
   Serial.printf("Day info: %s term=%s%s red=%d event=%s\n", day_info.lunar,
                 day_info.term ? day_info.term : "-", day_info.term_today ? "(today)" : "",
                 day_info.red_day, day_info.event ? day_info.event : "-");
-}
-
-// Draw text with a filled box behind it and the glyphs cut out (mono "highlight").
-static void draw_str_inverted(int x, int y, const char* s) {
-  int w = u8g2.getUTF8Width(s);
-  int a = u8g2.getAscent();
-  int d = u8g2.getDescent();    // negative
-  u8g2.drawBox(x - 1, y - a - 1, w + 2, a - d + 2);
-  u8g2.setDrawColor(0);
-  u8g2.drawUTF8(x, y, s);
-  u8g2.setDrawColor(1);
-}
-
-static void draw_str_hl(int x, int y, const char* s, bool highlight) {
-  if (highlight) draw_str_inverted(x, y, s);
-  else           u8g2.drawUTF8(x, y, s);
 }
 
 void time_sync_notification_cb(struct timeval * tv) {
@@ -173,10 +147,27 @@ static void sntp_begin(void) {
   sntp_restart();                              // apply the new interval
 }
 
+// ---- Drawing helpers ------------------------------------------------------
+// Draw text with a filled box behind it and the glyphs cut out (mono "highlight").
+static void draw_str_inverted(int x, int y, const char* s) {
+  int w = u8g2.getUTF8Width(s);
+  int a = u8g2.getAscent();
+  int d = u8g2.getDescent();    // negative
+  u8g2.drawBox(x - 1, y - a - 1, w + 2, a - d + 2);
+  u8g2.setDrawColor(0);
+  u8g2.drawUTF8(x, y, s);
+  u8g2.setDrawColor(1);
+}
+
+static void draw_str_hl(int x, int y, const char* s, bool highlight) {
+  if (highlight) draw_str_inverted(x, y, s);
+  else           u8g2.drawUTF8(x, y, s);
+}
+
 // Two-line status screen used while booting
 static void draw_status(const char * line1, const char * line2) {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x12_tf);
+  u8g2.setFont(FONT_STATUS);
   u8g2.drawStr(0, 24, line1);
   u8g2.drawStr(0, 44, line2);
   u8g2.sendBuffer();
@@ -235,72 +226,95 @@ static void boot_poll(void) {
 }
 
 // ---- Clock face -----------------------------------------------------------
-//
-// USE_HANGUL=1                                  USE_HANGUL=0
-//   y  2..14  "2026-08-30 일"        !           y  4..18  "Sun 30 Aug 2026"     !
-//   y 26..49  "23:59:59*"                        y 28..52  "23:59:59*"
-//   y 51..63  "추석  음 8.15      추분"           y 53..63  "L 7.11        Ipchu"
-// Weekday inverted on red days, term inverted on the day it begins,
-// holiday name inverted; "!" at top-right while Wi-Fi is down.
 static void draw_clock(const struct tm & t) {
-  char dateStr[32], timeStr[16];
+  char dateStr[16], wdStr[8], timeStr[8], secStr[4];
 
   update_day_info(t);
 
-  bool recently_synced = last_sync_ms != 0 && (millis() - last_sync_ms) < SYNC_MARK_MS;
-  snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d%s",
-           t.tm_hour, t.tm_min, t.tm_sec, recently_synced ? "*" : "");
-
   u8g2.clearBuffer();
 
-  // ---- Date line
-  u8g2.setFont(u8g2_font_8x13B_tf);
-#if USE_HANGUL
+  // ---- Row 1: "2026-08-30" + "(일)", centred; weekday inverted on red days
   snprintf(dateStr, sizeof(dateStr), "%d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
-  u8g2.drawStr(1, DATE_Y, dateStr);
+  snprintf(wdStr, sizeof(wdStr), "(%s)", weekDaysKo[t.tm_wday]);
+  u8g2.setFont(FONT_DATE);
+  int date_w = u8g2.getStrWidth(dateStr);
   u8g2.setFont(FONT_KO);
-  draw_str_hl(1 + u8g2.getStrWidth(dateStr) + 8, DATE_Y, weekDaysKo[t.tm_wday], day_info.red_day);
-#else
-  snprintf(dateStr, sizeof(dateStr), "%d %s %d", t.tm_mday, months[t.tm_mon], t.tm_year + 1900);
-  const char* wd = weekDays[t.tm_wday];
-  draw_str_hl(1, DATE_Y, wd, day_info.red_day);
-  u8g2.drawStr(1 + u8g2.getStrWidth(wd) + 8, DATE_Y, dateStr);
-#endif
-
-  // ---- Time
-  u8g2.setFont(u8g2_font_logisoso24_tr);
-  u8g2.drawStr(8, TIME_Y, timeStr);
-
-  // ---- Bottom line: [event] lunar ........ term
-  // Widest first: the event name always fits; the term is dropped when the
-  // line would overflow, then the lunar date.
-#if USE_HANGUL
+  int wd_w = u8g2.getUTF8Width(wdStr);
+  int x = (SCREEN_W - (date_w + DATE_GAP + wd_w)) / 2;
+  u8g2.setFont(FONT_DATE);
+  u8g2.drawStr(x, DATE_Y, dateStr);
   u8g2.setFont(FONT_KO);
+  draw_str_hl(x + date_w + DATE_GAP, DATE_Y, wdStr, day_info.red_day);
+
+  // ---- Row 2: HH:MM big, AM/PM over seconds in a narrow column, all centred
+#if TIME_12H
+  int hh = t.tm_hour % 12;
+  if (hh == 0) hh = 12;
+  snprintf(timeStr, sizeof(timeStr), "%2d:%02d", hh, t.tm_min);   // leading blank = one digit wide
+  const char* ampm = t.tm_hour < 12 ? "AM" : "PM";
 #else
-  u8g2.setFont(u8g2_font_6x12_tf);
+  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", t.tm_hour, t.tm_min);
 #endif
+  snprintf(secStr, sizeof(secStr), "%02d", t.tm_sec);
+
+  u8g2.setFont(FONT_TIME);
+  int time_w = u8g2.getStrWidth(timeStr);
+  u8g2.setFont(FONT_SEC);
+  int col_w = u8g2.getStrWidth(secStr);
+#if TIME_12H
+  u8g2.setFont(FONT_AMPM);
+  int ampm_w = u8g2.getStrWidth(ampm);
+  if (ampm_w > col_w) col_w = ampm_w;
+#endif
+  x = (SCREEN_W - (time_w + COL_GAP + col_w)) / 2;
+  u8g2.setFont(FONT_TIME);
+  u8g2.drawStr(x, TIME_Y, timeStr);
+  int col_x = x + time_w + COL_GAP;
+#if TIME_12H
+  u8g2.setFont(FONT_AMPM);
+  u8g2.drawStr(col_x, AMPM_Y, ampm);
+#endif
+  u8g2.drawHLine(col_x, SEP_Y, col_w);
+  u8g2.setFont(FONT_SEC);
+  u8g2.drawStr(col_x, SEC_Y, secStr);
+
+  // ---- Row 3: [event] lunar term, centred. The event name always fits;
+  // the term is dropped when the line would overflow, then the lunar date.
+  u8g2.setFont(FONT_KO);
   {
-    const int GAP = 8, W = 128 - 2;
-    int x = 1;
-    int ev_w    = day_info.event    ? u8g2.getUTF8Width(day_info.event) + GAP : 0;
-    int lunar_w = day_info.lunar[0] ? u8g2.getUTF8Width(day_info.lunar)       : 0;
-    int term_w  = day_info.term     ? u8g2.getUTF8Width(day_info.term)        : 0;
-    bool show_term  = term_w  && ev_w + lunar_w + (lunar_w ? GAP : 0) + term_w <= W;
-    bool show_lunar = lunar_w && ev_w + lunar_w <= W;
+    const int W = SCREEN_W - 2;
+    int ev_w    = day_info.event    ? u8g2.getUTF8Width(day_info.event) : 0;
+    int lunar_w = day_info.lunar[0] ? u8g2.getUTF8Width(day_info.lunar) : 0;
+    int term_w  = day_info.term     ? u8g2.getUTF8Width(day_info.term)  : 0;
+    int ev_gap  = ev_w ? ev_w + PART_GAP : 0;
+    bool show_term  = term_w  && ev_gap + lunar_w + (lunar_w ? PART_GAP : 0) + term_w <= W;
+    bool show_lunar = lunar_w && ev_gap + lunar_w <= W;
 
-    if (day_info.event) {
+    int total = 0, n = 0;
+    if (ev_w)       { total += ev_w;    n++; }
+    if (show_lunar) { total += lunar_w; n++; }
+    if (show_term)  { total += term_w;  n++; }
+    if (n > 1) total += PART_GAP * (n - 1);
+
+    x = (SCREEN_W - total) / 2;
+    if (ev_w) {
       draw_str_hl(x, BOTTOM_Y, day_info.event, day_info.event_holiday);
-      x += ev_w;
+      x += ev_w + PART_GAP;
     }
-    if (show_lunar) u8g2.drawUTF8(x, BOTTOM_Y, day_info.lunar);
-    if (show_term)  draw_str_hl(128 - 1 - term_w, BOTTOM_Y, day_info.term, day_info.term_today);
+    if (show_lunar) {
+      u8g2.drawUTF8(x, BOTTOM_Y, day_info.lunar);
+      x += lunar_w + PART_GAP;
+    }
+    if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
   }
 
-  // Wi-Fi dropped: small marker at the top-right corner (SNTP resumes on
-  // its own once WiFi.setAutoReconnect brings the link back)
-  if (WiFi.status() != WL_CONNECTED) {
-    u8g2.setFont(u8g2_font_6x12_tf);
-    u8g2.drawStr(122, DATE_Y, "!");
+  // ---- Status corner (top-left, the date starts at x=7):
+  // "!" while Wi-Fi is down (SNTP resumes on its own once WiFi.setAutoReconnect
+  // brings the link back), "*" briefly after a successful sync.
+  bool recently_synced = last_sync_ms != 0 && (millis() - last_sync_ms) < SYNC_MARK_MS;
+  if (WiFi.status() != WL_CONNECTED || recently_synced) {
+    u8g2.setFont(FONT_STATUS);
+    u8g2.drawStr(0, DATE_Y, WiFi.status() != WL_CONNECTED ? "!" : "*");
   }
 
   u8g2.sendBuffer();
