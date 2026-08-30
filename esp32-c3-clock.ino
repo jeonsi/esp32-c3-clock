@@ -71,7 +71,6 @@ const char* password = WIFI_PASSWORD;
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
-#define BUTTON_SHARES_I2C    (FACE_BUTTON_PIN == SDA || FACE_BUTTON_PIN == SCL)
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
@@ -164,7 +163,9 @@ static void button_poll(void) {
 #if FACE_BUTTON_PIN >= 0
   static int      last_level = HIGH;
   static uint32_t t_change   = 0;
+  static bool     seen_high  = false;         // fail-safe: a pin stuck low (miswired, no pull-up) is ignored
   int level = digitalRead(FACE_BUTTON_PIN);
+  if (level == HIGH) seen_high = true;
   if (level != last_level) {
     last_level = level;
     t_change = millis();
@@ -172,7 +173,8 @@ static void button_poll(void) {
   }
   if (millis() - t_change < 40) return;
   if (level == LOW) {
-    button_down = true;                       // confirmed press
+    if (seen_high && millis() - t_change < 3000) button_down = true;   // confirmed press; a >3 s "press" is not one
+    else button_down = false;
   } else if (button_down) {
     button_down = false;                      // confirmed release
     next_face(true);
@@ -520,8 +522,16 @@ void setup() {
   oled_clear_ram();
   draw_status("Connecting to Wi-Fi...", "");
 
-#if FACE_BUTTON_PIN >= 0 && !BUTTON_SHARES_I2C
-  pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);   // an I2C pin is already input-enabled and pulled up; pinMode() would break the bus
+#if FACE_BUTTON_PIN >= 0
+  // SDA/SCL are runtime constants in the ESP32 core (not macros - a #if
+  // against them silently compares with 0). An I2C pin is already
+  // input-enabled and pulled up, and pinMode() on it would break the bus.
+  if (FACE_BUTTON_PIN != SDA && FACE_BUTTON_PIN != SCL) {
+    pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);
+  }
+  Serial.printf("Face button on GPIO%d%s, level %d\n", FACE_BUTTON_PIN,
+                (FACE_BUTTON_PIN == SDA || FACE_BUTTON_PIN == SCL) ? " (shared with I2C)" : "",
+                digitalRead(FACE_BUTTON_PIN));
 #endif
   prefs.begin("clock", false);
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
