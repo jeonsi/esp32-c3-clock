@@ -8,22 +8,34 @@ import argparse, sys
 from PIL import Image, ImageDraw, ImageFont
 import u8g2font as u8
 
-def rasterize(ttf, size, chars, thresh=128, space_like=None):
-    font = ImageFont.truetype(ttf, size)
+def rasterize(ttf, size, chars, thresh=128, space_like=None, shear=0.0, adv_override=None, xoff_override=None):
+    """shear: extra italic slant, px of x shift per px of height above the
+    baseline (0 = the face's own slant). Rendered at 8x and box-filtered down
+    so the sheared segments land on the pixel grid cleanly.
+    adv_override / xoff_override: {char: px} - e.g. DSEG7's "." has advance 0
+    (a decimal point overlaid on the previous digit); give it its own cell."""
+    adv_override = adv_override or {}; xoff_override = xoff_override or {}
+    S = 8 if shear else 1
+    font = ImageFont.truetype(ttf, size * S)
     asc, desc = font.getmetrics()
-    em = size
+    em = size * S
+    pad = (-asc) % S                 # keep the baseline on the 1x pixel grid
     glyphs = []
     for ch in chars:
-        adv = font.getlength(ch)
-        if ch == ' ' and space_like:
-            adv = font.getlength(space_like)
-        W = int(adv) + 3 * em; H = asc + desc + 2 * em
+        adv = font.getlength(space_like if (ch == ' ' and space_like) else ch) / S
+        W = ((int(adv * S) + 3 * em) // S) * S
+        H = ((asc + desc + 2 * em + pad + S - 1) // S) * S
         im = Image.new('L', (W, H), 0)
-        ImageDraw.Draw(im).text((em, em), ch, font=font, fill=255)
+        ImageDraw.Draw(im).text((em, em + pad), ch, font=font, fill=255)
+        base = em + pad + asc
+        if shear:
+            # x_out = x_in + shear * (base - y)  ->  inverse for Image.transform
+            im = im.transform(im.size, Image.AFFINE, (1, shear, -shear * base, 0, 1, 0), resample=Image.BILINEAR)
+        if S > 1:
+            im = im.resize((W // S, H // S), Image.BOX)
+        W //= S; H //= S; em1 = em // S; base //= S
         px = im.load()
-        rows = []
-        for yy in range(H):
-            rows.append([1 if px[xx, yy] >= thresh else 0 for xx in range(W)])
+        rows = [[1 if px[xx, yy] >= thresh else 0 for xx in range(W)] for yy in range(H)]
         ys = [yy for yy in range(H) if any(rows[yy])]
         if not ys:
             glyphs.append(u8.Glyph(ord(ch), 0, 0, 0, 0, round(adv), []))
@@ -31,11 +43,17 @@ def rasterize(ttf, size, chars, thresh=128, space_like=None):
         xs = [xx for xx in range(W) if any(rows[yy][xx] for yy in ys)]
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
         bitmap = [rows[yy][x0:x1 + 1] for yy in range(y0, y1 + 1)]
-        # baseline is at image y = em + asc
-        base = em + asc
-        g = u8.Glyph(ord(ch), x1 - x0 + 1, y1 - y0 + 1, x0 - em, base - (y1 + 1), round(adv), bitmap)
+        g = u8.Glyph(ord(ch), x1 - x0 + 1, y1 - y0 + 1, x0 - em1, base - (y1 + 1), round(adv), bitmap)
+        if ch in adv_override:  g.d = adv_override[ch]
+        if ch in xoff_override: g.x = xoff_override[ch]
         glyphs.append(g)
     return glyphs
+
+def _kv(items):
+    out = {}
+    for it in items or []:
+        k, v = it.rsplit('=', 1); out[k] = int(v)
+    return out
 
 def main():
     ap = argparse.ArgumentParser()
@@ -43,9 +61,10 @@ def main():
     ap.add_argument('--chars', required=True); ap.add_argument('--name', required=True)
     ap.add_argument('--thresh', type=int, default=128); ap.add_argument('--space-like', default=None)
     ap.add_argument('--out', default=None); ap.add_argument('--preview', action='store_true')
-    ap.add_argument('--append', action='store_true')
+    ap.add_argument('--append', action='store_true'); ap.add_argument('--shear', type=float, default=0.0)
+    ap.add_argument('--adv', action='append', help='CHAR=px advance override'); ap.add_argument('--xoff', action='append', help='CHAR=px x-offset override')
     a = ap.parse_args()
-    glyphs = rasterize(a.ttf, a.size, a.chars, a.thresh, a.space_like)
+    glyphs = rasterize(a.ttf, a.size, a.chars, a.thresh, a.space_like, a.shear, _kv(a.adv), _kv(a.xoff))
     data = u8.encode(glyphs)
     # round trip check
     hdr, back = u8.decode(data)
@@ -54,7 +73,7 @@ def main():
         assert (g.w, g.h, g.x, g.y, g.d) == (b.w, b.h, b.x, b.y, b.d), (g.enc, g, b)
         assert g.bitmap == b.bitmap, f'bitmap mismatch for {chr(g.enc)}'
     vis = [g for g in glyphs if g.h]
-    print(f'{a.name}: {len(data)} bytes, {len(glyphs)} glyphs, size={a.size} thresh={a.thresh} '
+    print(f'{a.name}: {len(data)} bytes, {len(glyphs)} glyphs, size={a.size} thresh={a.thresh} shear={a.shear} '
           f'top={max(g.top for g in vis)} bottom={min(g.y for g in vis)} '
           f'adv={[g.d for g in glyphs]}', file=sys.stderr)
     if a.preview:
@@ -63,7 +82,7 @@ def main():
             for row in g.bitmap:
                 print(''.join('#' if p else '.' for p in row), file=sys.stderr)
     comment = (f'{a.name}: {a.ttf.split("/")[-1]} {a.size}px, chars "{a.chars}", thresh {a.thresh}'
-               f' - generated by tools/mkfont.py')
+               f'{f", shear {a.shear}" if a.shear else ""}{f", adv {a.adv}" if a.adv else ""}{f", xoff {a.xoff}" if a.xoff else ""} - generated by tools/mkfont.py')
     c = u8.to_c(a.name, data, comment)
     if a.out:
         with open(a.out, 'a' if a.append else 'w') as f:

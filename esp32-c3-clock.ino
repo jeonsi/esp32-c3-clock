@@ -12,13 +12,15 @@
 
     Screen (a 128x64 rendition of the CYD digital face, everything centred):
 
-        2026-08-30 (일)          DSEG7 Italic 11px date + 굴림 12px weekday,
+        2026-08-30 (일)          DSEG7 Italic 11px date (extra slant, see
+                                 tools/gen_fonts.sh) + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
                         PM       DSEG14 Italic 10px (TIME_12H)
         11:58           ──       DSEG7 Bold Italic 28px HH:MM
                         42       DSEG7 Italic 11px seconds
         추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
-                                 lunar date ("음 윤7.11" = leap month), solar
+                                 lunar date - "음"/"음 윤" (leap month) in 굴림,
+                                 the numbers in the DSEG7 11px - and the solar
                                  term (inverted on the day it begins)
 
       - top-left corner: "!" while Wi-Fi is down, "*" for a few seconds
@@ -53,21 +55,25 @@ const char* password = WIFI_PASSWORD;
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
-#define FONT_DATE    font_dseg7_i_11              // 12px tall digits, "0-9" "-"
+#define FONT_DATE    font_dseg7_i_11              // 11px tall slanted digits, "0-9" "-" "."
 #define FONT_TIME    font_dseg7_bi_28             // 29px tall digits, "0-9" ":" " "
 #define FONT_SEC     font_dseg7_i_11
 #define FONT_AMPM    font_dseg14_i_10             // "A" "M" "P"
 #define FONT_STATUS  u8g2_font_6x12_tf            // boot screen, "!" / "*"
 
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
-// them holds the 29 px time centred (y 18..46).
-#define DATE_Y       12
+// them holds the 29 px time centred (y 18..46). The 11 px DSEG digits sit one
+// row lower than the Hangul baseline so they centre on the Hangul body.
+#define DATE_Y       12                           // "(일)"
+#define DATE_NUM_Y   13                           // "2026-08-30"
 #define TIME_Y       47
 #define AMPM_Y       28                           // top of AM/PM aligned with the digits' top
 #define SEP_Y        31                           // rule between AM/PM and seconds
 #define SEC_Y        47                           // seconds bottom-aligned with the digits
-#define BOTTOM_Y     61
-#define DATE_GAP     4                            // date .. (weekday)
+#define BOTTOM_Y     61                           // Hangul
+#define BOTTOM_NUM_Y 62                           // lunar digits
+#define DATE_GAP     6                            // date .. (weekday)
+#define LUNAR_GAP    3                            // "음" .. "8.15"
 #define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
 #define PART_GAP     8                            // between bottom-line items
 #define SCREEN_W     128
@@ -92,7 +98,8 @@ static int               last_drawn_sec = -1;
 static struct {
   int         yday  = -1;      // tm_yday of the cached day (-1 = none)
   int         year  = -1;
-  char        lunar[16];       // "음 7.11" / "음 윤7.11", "" outside the table
+  char        lunar_kr[8];     // "음" / "음 윤" (leap month), "" outside the table
+  char        lunar_num[8];    // "7.11"
   const char* term  = nullptr; // solar term name or nullptr
   bool        term_today = false;
   bool        red_day    = false;
@@ -108,10 +115,10 @@ static void update_day_info(const struct tm & t) {
   klc_date_t ld;
   bool have_lunar = klc_solar_to_lunar(&t, &ld);
   if (have_lunar) {
-    snprintf(day_info.lunar, sizeof(day_info.lunar), "음 %s%d.%d",
-             ld.leap ? "윤" : "", ld.month, ld.day);
+    snprintf(day_info.lunar_kr,  sizeof(day_info.lunar_kr),  "음%s", ld.leap ? " 윤" : "");
+    snprintf(day_info.lunar_num, sizeof(day_info.lunar_num), "%d.%d", ld.month, ld.day);
   } else {
-    day_info.lunar[0] = '\0';
+    day_info.lunar_kr[0] = day_info.lunar_num[0] = '\0';
   }
 
   day_info.term    = kst_current_term(&t, &day_info.term_today);
@@ -123,7 +130,7 @@ static void update_day_info(const struct tm & t) {
   day_info.event_holiday = day_info.event != nullptr;
   if (!day_info.event && have_lunar) day_info.event = kr_lunar_festival(&ld);
 
-  Serial.printf("Day info: %s term=%s%s red=%d event=%s\n", day_info.lunar,
+  Serial.printf("Day info: %s %s term=%s%s red=%d event=%s\n", day_info.lunar_kr, day_info.lunar_num,
                 day_info.term ? day_info.term : "-", day_info.term_today ? "(today)" : "",
                 day_info.red_day, day_info.event ? day_info.event : "-");
 }
@@ -262,7 +269,7 @@ static void draw_clock(const struct tm & t) {
   int wd_w = adv_width(wdStr);
   int x = (SCREEN_W - (date_w + DATE_GAP + wd_w)) / 2;
   u8g2.setFont(FONT_DATE);
-  u8g2.drawStr(x, DATE_Y, dateStr);
+  u8g2.drawStr(x, DATE_NUM_Y, dateStr);
   u8g2.setFont(FONT_KO);
   draw_str_hl(x + date_w + DATE_GAP, DATE_Y, wdStr, day_info.red_day);
 
@@ -300,12 +307,18 @@ static void draw_clock(const struct tm & t) {
 
   // ---- Row 3: [event] lunar term, centred. The event name always fits;
   // the term is dropped when the line would overflow, then the lunar date.
-  u8g2.setFont(FONT_KO);
+  // The lunar date is "음"/"음 윤" in Hangul followed by DSEG digits.
   {
     const int W = SCREEN_W - 2;
-    int ev_w    = day_info.event    ? adv_width(day_info.event) : 0;
-    int lunar_w = day_info.lunar[0] ? adv_width(day_info.lunar) : 0;
-    int term_w  = day_info.term     ? adv_width(day_info.term)  : 0;
+    int kr_w = 0, num_w = 0;
+    if (day_info.lunar_num[0]) {
+      u8g2.setFont(FONT_KO);   kr_w  = adv_width(day_info.lunar_kr);
+      u8g2.setFont(FONT_DATE); num_w = adv_width(day_info.lunar_num);
+    }
+    u8g2.setFont(FONT_KO);
+    int ev_w    = day_info.event ? adv_width(day_info.event) : 0;
+    int lunar_w = num_w ? kr_w + LUNAR_GAP + num_w : 0;
+    int term_w  = day_info.term  ? adv_width(day_info.term)  : 0;
     int ev_gap  = ev_w ? ev_w + PART_GAP : 0;
     bool show_term  = term_w  && ev_gap + lunar_w + (lunar_w ? PART_GAP : 0) + term_w <= W;
     bool show_lunar = lunar_w && ev_gap + lunar_w <= W;
@@ -322,7 +335,10 @@ static void draw_clock(const struct tm & t) {
       x += ev_w + PART_GAP;
     }
     if (show_lunar) {
-      u8g2.drawUTF8(x, BOTTOM_Y, day_info.lunar);
+      u8g2.drawUTF8(x, BOTTOM_Y, day_info.lunar_kr);
+      u8g2.setFont(FONT_DATE);
+      u8g2.drawStr(x + kr_w + LUNAR_GAP, BOTTOM_NUM_Y, day_info.lunar_num);
+      u8g2.setFont(FONT_KO);
       x += lunar_w + PART_GAP;
     }
     if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
