@@ -10,12 +10,22 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
       - a small "*" is shown for a few seconds after every successful sync
+
+    Bottom line: Korean lunar date + current solar term (절기), ASCII only,
+    from the CYD clock's korean_calendar.h (tables are copied verbatim, so
+    refresh that file from the CYD project when the years run out):
+      - "L 7.11"  = lunar 7/11,  "L+7.11" = day 11 of leap (intercalary) 7th month
+      - solar term in Revised Romanization (Ipchu, Cheoseo, ...), right-aligned;
+        drawn inverted on the day the term begins (CYD shows it green)
+      - the weekday is drawn inverted on Sundays and Korean public holidays
+        (CYD shows it red). Holiday names are Korean-only, so they are not shown.
 */
 
 #include <WiFi.h>
 #include <U8g2lib.h>
 #include "time.h"
 #include "esp_sntp.h"
+#include "korean_calendar.h"
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -35,6 +45,13 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 const char* weekDays[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 const char* months[12]  = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
+// Revised-Romanization names for TERM_KR[] (korean_calendar.h), same order.
+static const char* const TERM_ASCII[24] = {
+  "Sohan", "Daehan", "Ipchun", "Usu", "Gyeongchip", "Chunbun", "Cheongmyeong", "Gogu",
+  "Ipha", "Soman", "Mangjong", "Haji", "Soseo", "Daeseo", "Ipchu", "Cheoseo",
+  "Baengno", "Chubun", "Hanro", "Sanggang", "Ipdong", "Soseol", "Daeseol", "Dongji",
+};
+
 // ---- Boot state machine ---------------------------------------------------
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
 static boot_state_t boot_state = BOOT_WIFI;
@@ -44,6 +61,57 @@ static int          wifi_attempts = 1;
 
 static volatile uint32_t last_sync_ms = 0;   // millis() of the last SNTP sync (0 = never)
 static int               last_drawn_sec = -1;
+
+// ---- Per-day calendar info (lunar date, solar term, red day) --------------
+// Recomputed only when the date changes; the lookups are table scans.
+static struct {
+  int         yday  = -1;      // tm_yday of the cached day (-1 = none)
+  int         year  = -1;
+  char        lunar[12];       // "L 7.11" / "L+7.11" / "" when outside the table
+  const char* term  = nullptr; // ASCII term name or nullptr
+  bool        term_today = false;
+  bool        red_day    = false;
+} day_info;
+
+static void update_day_info(const struct tm & t) {
+  if (t.tm_yday == day_info.yday && t.tm_year == day_info.year) return;
+  day_info.yday = t.tm_yday;
+  day_info.year = t.tm_year;
+
+  klc_date_t ld;
+  if (klc_solar_to_lunar(&t, &ld)) {
+    snprintf(day_info.lunar, sizeof(day_info.lunar), "L%c%d.%d",
+             ld.leap ? '+' : ' ', ld.month, ld.day);
+  } else {
+    day_info.lunar[0] = '\0';
+  }
+
+  // kst_current_term() returns a pointer into TERM_KR[]; map it to the
+  // ASCII table by index so korean_calendar.h stays identical to the CYD copy.
+  day_info.term = nullptr;
+  const char* kr = kst_current_term(&t, &day_info.term_today);
+  if (kr) {
+    for (int i = 0; i < 24; i++) {
+      if (kr == TERM_KR[i]) { day_info.term = TERM_ASCII[i]; break; }
+    }
+  }
+
+  day_info.red_day = kr_is_red_day(&t);
+  Serial.printf("Day info: %s term=%s%s red=%d\n", day_info.lunar,
+                day_info.term ? day_info.term : "-", day_info.term_today ? "(today)" : "",
+                day_info.red_day);
+}
+
+// Draw text with a filled box behind it and the glyphs cut out (mono "highlight").
+static void draw_str_inverted(int x, int y, const char* s) {
+  int w = u8g2.getStrWidth(s);
+  int a = u8g2.getAscent();
+  int d = u8g2.getDescent();    // negative
+  u8g2.drawBox(x - 1, y - a - 1, w + 2, a - d + 2);
+  u8g2.setDrawColor(0);
+  u8g2.drawStr(x, y, s);
+  u8g2.setDrawColor(1);
+}
 
 void time_sync_notification_cb(struct timeval * tv) {
   (void)tv;
@@ -126,11 +194,17 @@ static void boot_poll(void) {
 }
 
 // ---- Clock face -----------------------------------------------------------
+//
+//   y  0..16  "Wed 30 Aug 2026"   8x13B, weekday inverted on red days,  "!" at right if Wi-Fi is down
+//   y 28..52  "23:59:59*"         logisoso24
+//   y 53..63  "L 7.11      Ipchu" 6x12, lunar left / term right (inverted on 절입 day)
 static void draw_clock(const struct tm & t) {
   char dateStr[32], timeStr[16];
 
-  snprintf(dateStr, sizeof(dateStr), "%s %d %s %d",
-           weekDays[t.tm_wday], t.tm_mday, months[t.tm_mon], t.tm_year + 1900);
+  update_day_info(t);
+
+  snprintf(dateStr, sizeof(dateStr), "%d %s %d",
+           t.tm_mday, months[t.tm_mon], t.tm_year + 1900);
 
   bool recently_synced = last_sync_ms != 0 && (millis() - last_sync_ms) < SYNC_MARK_MS;
   snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d%s",
@@ -138,17 +212,29 @@ static void draw_clock(const struct tm & t) {
 
   u8g2.clearBuffer();
 
+  // Date line: weekday (highlighted on Sunday / public holiday) + date
   u8g2.setFont(u8g2_font_8x13B_tf);
-  u8g2.drawStr(0, 16, dateStr);
+  const char* wd = weekDays[t.tm_wday];
+  if (day_info.red_day) draw_str_inverted(1, 16, wd);
+  else                  u8g2.drawStr(1, 16, wd);
+  u8g2.drawStr(1 + u8g2.getStrWidth(wd) + 8, 16, dateStr);
 
   u8g2.setFont(u8g2_font_logisoso24_tr);
   u8g2.drawStr(8, 52, timeStr);
 
-  // Wi-Fi dropped: small marker in the corner (SNTP resumes on its own
-  // once WiFi.setAutoReconnect brings the link back)
+  // Bottom line: lunar date left, solar term right
+  u8g2.setFont(u8g2_font_6x12_tf);
+  if (day_info.lunar[0]) u8g2.drawStr(1, 62, day_info.lunar);
+  if (day_info.term) {
+    int x = 128 - 1 - u8g2.getStrWidth(day_info.term);
+    if (day_info.term_today) draw_str_inverted(x, 62, day_info.term);
+    else                     u8g2.drawStr(x, 62, day_info.term);
+  }
+
+  // Wi-Fi dropped: small marker at the top-right corner (SNTP resumes on
+  // its own once WiFi.setAutoReconnect brings the link back)
   if (WiFi.status() != WL_CONNECTED) {
-    u8g2.setFont(u8g2_font_6x12_tf);
-    u8g2.drawStr(122, 63, "!");
+    u8g2.drawStr(122, 12, "!");
   }
 
   u8g2.sendBuffer();
