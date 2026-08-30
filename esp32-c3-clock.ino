@@ -22,8 +22,8 @@
                                  the numbers in the DSEG7 11px - and the solar
                                  term (inverted on the day it begins)
 
-      - top-left corner: "!" while Wi-Fi is down, "*" for a few seconds
-        after every successful SNTP sync
+      - Wi-Fi drops and SNTP syncs are only logged to Serial; the face
+        itself has no status marker
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
         public holidays 2026-2030) is korean_calendar.h copied verbatim from
         the CYD clock; refresh it from there when the years run out
@@ -50,7 +50,6 @@ const char* password = WIFI_PASSWORD;
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
-#define SYNC_MARK_MS         (5 * 1000)           // how long "*" stays after a sync
 #define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
 
 // ---- Fonts / layout -------------------------------------------------------
@@ -59,7 +58,7 @@ const char* password = WIFI_PASSWORD;
 #define FONT_TIME    font_dseg7_bi_28             // 29px tall digits, "0-9" ":" " "
 #define FONT_SEC     font_dseg7_i_11
 #define FONT_AMPM    font_dseg14_i_11             // 10px tall "A" "M" "P"
-#define FONT_STATUS  u8g2_font_6x12_tf            // boot screen, "!" / "*"
+#define FONT_STATUS  u8g2_font_6x12_tf            // boot screen
 
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
 // them holds the 29 px time centred (y 18..46). The 11 px DSEG digits sit one
@@ -90,8 +89,7 @@ static uint32_t     boot_t0;
 static uint32_t     wifi_attempt_ms;
 static int          wifi_attempts = 1;
 
-static volatile uint32_t last_sync_ms = 0;   // millis() of the last SNTP sync (0 = never)
-static int               last_drawn_sec = -1;
+static int          last_drawn_sec = -1;
 
 // ---- Per-day calendar info (lunar date, solar term, red day, event) -------
 // Recomputed only when the date changes; the lookups are table scans.
@@ -137,7 +135,6 @@ static void update_day_info(const struct tm & t) {
 
 void time_sync_notification_cb(struct timeval * tv) {
   (void)tv;
-  last_sync_ms = millis();
   struct tm t;
   time_t now = time(nullptr);
   localtime_r(&now, &t);
@@ -342,15 +339,6 @@ static void draw_clock(const struct tm & t) {
       x += lunar_w + PART_GAP;
     }
     if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
-  }
-
-  // ---- Status corner (top-left, the date starts at x=7):
-  // "!" while Wi-Fi is down (SNTP resumes on its own once WiFi.setAutoReconnect
-  // brings the link back), "*" briefly after a successful sync.
-  bool recently_synced = last_sync_ms != 0 && (millis() - last_sync_ms) < SYNC_MARK_MS;
-  if (WiFi.status() != WL_CONNECTED || recently_synced) {
-    u8g2.setFont(FONT_STATUS);
-    u8g2.drawStr(0, DATE_Y, WiFi.status() != WL_CONNECTED ? "!" : "*");
   }
 
   u8g2.sendBuffer();
