@@ -38,9 +38,13 @@
       0.1 degree per second and the hour hand 0.5 degree per minute.
 
       - night dimming: between NIGHT_FROM_HOUR and NIGHT_TO_HOUR the panel
-        contrast drops to CONTRAST_NIGHT (there is no light sensor, so this
-        goes by the clock, unlike the CYD's LDR). Set CONTRAST_NIGHT to 0 and
-        NIGHT_OFF to 1 to switch the panel off completely at night instead.
+        is dimmed (there is no light sensor, so this goes by the clock,
+        unlike the CYD's LDR). The contrast command alone (0x81) barely
+        changes these panels - U8g2's init sets the pre-charge period to its
+        maximum (0xD9 = 0xF1), which dominates - so night mode lowers
+        pre-charge, VCOMH and contrast together and restores the init values
+        by day. NIGHT_DITHER additionally lights only every other pixel;
+        NIGHT_OFF switches the panel off instead.
       - Wi-Fi drops and SNTP syncs are only logged to Serial; the faces
         themselves have no status marker
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
@@ -79,8 +83,8 @@ const char* password = WIFI_PASSWORD;
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      22                   // dim from 22:00 ...
 #define NIGHT_TO_HOUR        7                    // ... until 07:00 (may wrap past midnight)
-#define CONTRAST_DAY         255                  // SH1106/SSD1306 contrast 0..255
-#define CONTRAST_NIGHT       8                    // dim, still readable in a dark room
+#define CONTRAST_NIGHT       0                    // 0x81 contrast at night (0..255); by day U8g2's init value 0xCF is restored
+#define NIGHT_DITHER         0                    // 1: also light only every other pixel at night (checkerboard)
 #define NIGHT_OFF            0                    // 1: turn the panel off at night instead of dimming
 
 // ---- Fonts / layout -------------------------------------------------------
@@ -260,18 +264,49 @@ static bool is_night(int hour) {
   return hour >= NIGHT_FROM_HOUR || hour < NIGHT_TO_HOUR;       // wraps past midnight
 }
 
+static bool night_now = false;
+
+static void panel_cmd2(uint8_t cmd, uint8_t arg) {
+  u8x8_t* u8x8 = u8g2.getU8x8();
+  u8x8_cad_StartTransfer(u8x8);
+  u8x8_cad_SendCmd(u8x8, cmd);
+  u8x8_cad_SendArg(u8x8, arg);
+  u8x8_cad_EndTransfer(u8x8);
+}
+
 // Called once per redraw; only talks to the panel when the state changes.
 static void apply_brightness(const struct tm & t) {
   static int applied = -1;              // -1 = nothing sent yet
   int want = is_night(t.tm_hour) ? 1 : 0;
   if (want == applied) return;
   applied = want;
+  night_now = want;
 #if NIGHT_OFF
   u8g2.setPowerSave(want);              // 1 = display off (RAM kept, redraws continue unseen)
 #else
-  u8g2.setContrast(want ? CONTRAST_NIGHT : CONTRAST_DAY);
+  if (want) {
+    panel_cmd2(0xD9, 0x11);             // pre-charge period: phase 1 = 1, phase 2 = 1 (minimum)
+    panel_cmd2(0xDB, 0x00);             // VCOMH deselect level: lowest
+    panel_cmd2(0x81, CONTRAST_NIGHT);   // contrast
+  } else {                              // values from U8g2's ssd1306/sh1106 128x64 noname init sequence
+    panel_cmd2(0xD9, 0xF1);
+    panel_cmd2(0xDB, 0x40);
+    panel_cmd2(0x81, 0xCF);
+  }
 #endif
   Serial.printf("Brightness: %s\n", want ? "night" : "day");
+}
+
+// Optional software dimming: keep only a checkerboard of the frame buffer.
+// Each buffer byte is 8 vertical pixels of one column, so alternate the
+// mask per column (0x55 / 0xAA) to get the pattern.
+static void dither_buffer(void) {
+#if NIGHT_DITHER
+  if (!night_now) return;
+  uint8_t* buf = u8g2.getBufferPtr();
+  int n = 8 * u8g2.getBufferTileHeight() * u8g2.getBufferTileWidth();
+  for (int i = 0; i < n; i++) buf[i] &= (i & 1) ? 0xAA : 0x55;
+#endif
 }
 
 // ---- Drawing helpers ------------------------------------------------------
@@ -496,6 +531,7 @@ static void draw_clock(const struct tm & t) {
     if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
   }
 
+  dither_buffer();
   u8g2.sendBuffer();
 }
 
@@ -545,6 +581,7 @@ static void draw_analog(const struct tm & t) {
   u8g2.drawLine(x2, y2, x, y);
   u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
 
+  dither_buffer();
   u8g2.sendBuffer();
 }
 
