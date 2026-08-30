@@ -10,8 +10,9 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
-    Two faces, cycled with the BOOT button and remembered in NVS like the
-    CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
+    Two faces, cycled with a short press of the BOOT button; a long press
+    (1 s) toggles night dimming on/off with a 2 s banner. Both settings are
+    remembered in NVS like the CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
     SCL (default Wire pins are SDA 8 / SCL 9), so the pin is never
     reconfigured with pinMode() - that freezes the display. It is only
     sampled with digitalRead() between frames, when the bus is idle and the
@@ -79,6 +80,9 @@ const char* password = WIFI_PASSWORD;
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
+#define LONG_PRESS_MS        1000                 // hold this long to toggle night mode instead of the face
+#define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
+#define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
 
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      22                   // dim from 22:00 ...
@@ -185,6 +189,7 @@ static void button_poll(void) {
   static int      last_level = HIGH;
   static uint32_t t_change   = 0;
   static bool     seen_high  = false;         // fail-safe: a pin stuck low (miswired, no pull-up) is ignored
+  static uint32_t press_ms   = 0;             // when the confirmed press began
   int level = digitalRead(FACE_BUTTON_PIN);
   if (level == HIGH) seen_high = true;
   if (level != last_level) {
@@ -194,11 +199,16 @@ static void button_poll(void) {
   }
   if (millis() - t_change < 40) return;
   if (level == LOW) {
-    if (seen_high && millis() - t_change < 3000) button_down = true;   // confirmed press; a >3 s "press" is not one
-    else button_down = false;
+    if (seen_high && millis() - t_change < 3000) {   // confirmed press; a >3 s "press" is not one
+      if (!button_down) press_ms = t_change;
+      button_down = true;
+    } else {
+      button_down = false;
+    }
   } else if (button_down) {
-    button_down = false;                      // confirmed release
-    next_face(true);
+    button_down = false;                      // confirmed release: t_change is the release time
+    if (t_change - press_ms >= LONG_PRESS_MS) toggle_night();
+    else                                      next_face(true);
   }
 #endif
 }
@@ -270,7 +280,19 @@ static bool is_night(int hour) {
   return hour >= NIGHT_FROM_HOUR || hour < NIGHT_TO_HOUR;       // wraps past midnight
 }
 
-static bool night_now = false;
+static bool     night_now     = false;
+static bool     night_enabled = NIGHT_ENABLE_DEFAULT;
+static uint32_t msg_until_ms  = 0;          // banner visible while millis() < this
+static const char* msg_text   = nullptr;
+
+static void toggle_night(void) {
+  night_enabled = !night_enabled;
+  prefs.putInt("night", night_enabled ? 1 : 0);
+  msg_text = night_enabled ? "야간 모드 켜짐" : "야간 모드 꺼짐";
+  msg_until_ms = millis() + MSG_MS;
+  last_drawn_sec = -1;                      // redraw (and re-apply brightness) now
+  Serial.printf("Night mode: %s\n", night_enabled ? "on" : "off");
+}
 
 static void panel_cmd2(uint8_t cmd, uint8_t arg) {
   u8x8_t* u8x8 = u8g2.getU8x8();
@@ -283,7 +305,7 @@ static void panel_cmd2(uint8_t cmd, uint8_t arg) {
 // Called once per redraw; only talks to the panel when the state changes.
 static void apply_brightness(const struct tm & t) {
   static int applied = -1;              // -1 = nothing sent yet
-  int want = is_night(t.tm_hour) ? 1 : 0;
+  int want = (night_enabled && is_night(t.tm_hour)) ? 1 : 0;
   if (want == applied) return;
   applied = want;
   night_now = want;
@@ -314,6 +336,9 @@ static void dither_buffer(void) {
   for (int i = 0; i < n; i++) buf[i] &= (i & 1) ? 0xAA : 0x55;
 #endif
 }
+
+// Inverted banner across the middle of the screen (night mode toggled).
+static void draw_banner(void);
 
 // ---- Drawing helpers ------------------------------------------------------
 // Width of a (UTF-8) string as drawn: the sum of the glyph advances.
@@ -537,6 +562,7 @@ static void draw_clock(const struct tm & t) {
     if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
   }
 
+  draw_banner();
   dither_buffer();
   u8g2.sendBuffer();
 }
@@ -587,8 +613,22 @@ static void draw_analog(const struct tm & t) {
   u8g2.drawLine(x2, y2, x, y);
   u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
 
+  draw_banner();
   dither_buffer();
   u8g2.sendBuffer();
+}
+
+static void draw_banner(void) {
+  if (!msg_text || (int32_t)(millis() - msg_until_ms) >= 0) return;
+  u8g2.setFont(FONT_KO);
+  int w = adv_width(msg_text);
+  int x = (SCREEN_W - w) / 2;
+  int y = SCREEN_H / 2 + 4;                 // baseline: 12 px glyphs centred on the screen
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(x - 6, y - 13, w + 12, 18);
+  u8g2.setDrawColor(0);
+  u8g2.drawUTF8(x, y, msg_text);
+  u8g2.setDrawColor(1);
 }
 
 void setup() {
@@ -611,6 +651,8 @@ void setup() {
   prefs.begin("clock", false);
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
   face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
+  night_enabled = prefs.getInt("night", NIGHT_ENABLE_DEFAULT) != 0;
+  Serial.printf("Night mode: %s\n", night_enabled ? "on" : "off");
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
