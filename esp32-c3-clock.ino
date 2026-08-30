@@ -83,7 +83,13 @@ const char* password = WIFI_PASSWORD;
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      22                   // dim from 22:00 ...
 #define NIGHT_TO_HOUR        7                    // ... until 07:00 (may wrap past midnight)
-#define CONTRAST_NIGHT       0                    // 0x81 contrast at night (0..255); by day U8g2's init value 0xCF is restored
+// Night panel settings (day restores U8g2's init values 0xCF / 0xF1 / 0x40).
+// Brightness is mostly set by the pre-charge phase-2 length (0xD9 high
+// nibble, 1..15) and only fine-tuned by contrast; 0x11 + VCOMH 0 + contrast 0
+// is black on some panels, so start from these and adjust to taste.
+#define CONTRAST_NIGHT       0x20                 // 0x81: 0..255
+#define NIGHT_PRECHARGE      0x11                 // 0xD9: phase2<<4 | phase1, each 1..15 (init 0xF1)
+#define NIGHT_VCOMH          0x00                 // 0xDB: 0x00 / 0x20 / 0x30 (init 0x40)
 #define NIGHT_DITHER         0                    // 1: also light only every other pixel at night (checkerboard)
 #define NIGHT_OFF            0                    // 1: turn the panel off at night instead of dimming
 
@@ -285,8 +291,8 @@ static void apply_brightness(const struct tm & t) {
   u8g2.setPowerSave(want);              // 1 = display off (RAM kept, redraws continue unseen)
 #else
   if (want) {
-    panel_cmd2(0xD9, 0x11);             // pre-charge period: phase 1 = 1, phase 2 = 1 (minimum)
-    panel_cmd2(0xDB, 0x00);             // VCOMH deselect level: lowest
+    panel_cmd2(0xD9, NIGHT_PRECHARGE);  // pre-charge period
+    panel_cmd2(0xDB, NIGHT_VCOMH);      // VCOMH deselect level
     panel_cmd2(0x81, CONTRAST_NIGHT);   // contrast
   } else {                              // values from U8g2's ssd1306/sh1106 128x64 noname init sequence
     panel_cmd2(0xD9, 0xF1);
