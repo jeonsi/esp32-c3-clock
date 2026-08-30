@@ -10,8 +10,11 @@
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
-    Two faces, cycled with the BOOT button (FACE_BUTTON_PIN, GPIO9 on most
-    ESP32-C3 dev boards) and remembered in NVS like the CYD clock:
+    Two faces, cycled with a push button (FACE_BUTTON_PIN -> GND) and
+    remembered in NVS like the CYD clock. NOTE: the BOOT button (GPIO9) is
+    the OLED's SCL on the ESP32-C3 (default Wire pins are SDA 8 / SCL 9),
+    so it cannot be used - wire a separate button, or set FACE_CYCLE_S to
+    alternate the faces automatically.
 
     Digital (a 128x64 rendition of the CYD digital face, everything centred):
 
@@ -61,8 +64,13 @@ const char* password = WIFI_PASSWORD;
 #define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_12H             1                    // 1: "11:58" + AM/PM, 0: "23:58"
-#define FACE_BUTTON_PIN      9                    // BOOT button on most ESP32-C3 boards, active low; -1 = none
+#define FACE_BUTTON_PIN      4                    // push button to GND (INPUT_PULLUP); -1 = none. NOT 8/9: I2C!
+#define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
+
+#if FACE_BUTTON_PIN == 8 || FACE_BUTTON_PIN == 9
+#error "FACE_BUTTON_PIN 8/9 are the ESP32-C3 default I2C pins (the OLED) - pinMode() on them freezes the display"
+#endif
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
@@ -125,15 +133,27 @@ static int          wifi_attempts = 1;
 
 static int          last_drawn_sec = -1;
 
-static void set_face(face_t f) {
+static void set_face(face_t f, bool save) {
   face_mode = f;
-  prefs.putInt("face", (int)f);        // only called on change, so no NVS wear worry
-  last_drawn_sec = -1;                 // redraw now
+  if (save) prefs.putInt("face", (int)f);   // button presses only - the auto cycle would wear NVS
+  last_drawn_sec = -1;                      // redraw now
   Serial.printf("Face: %s\n", f == FACE_ANALOG ? "analog" : "digital");
 }
 
-// BOOT button: cycle faces on each press (40 ms debounce, acts on press).
+static void next_face(bool save) {
+  set_face((face_t)((face_mode + 1) % FACE_COUNT), save);
+}
+
+// Push button: cycle faces on each press (40 ms debounce, acts on press).
+// Optional auto cycle every FACE_CYCLE_S seconds for boards without a button.
 static void button_poll(void) {
+#if FACE_CYCLE_S > 0
+  static uint32_t last_cycle_ms = 0;
+  if (millis() - last_cycle_ms > FACE_CYCLE_S * 1000UL) {
+    last_cycle_ms = millis();
+    next_face(false);
+  }
+#endif
 #if FACE_BUTTON_PIN >= 0
   static int      last_level = HIGH;
   static uint32_t t_change   = 0;
@@ -145,7 +165,7 @@ static void button_poll(void) {
   } else if (millis() - t_change > 40) {
     if (level == LOW && !handled) {
       handled = true;
-      set_face((face_t)((face_mode + 1) % FACE_COUNT));
+      next_face(true);
     }
     if (level == HIGH) handled = false;
   }
