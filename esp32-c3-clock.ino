@@ -305,6 +305,16 @@ static void draw_clock(const struct tm & t) {
 
   u8g2.setFont(FONT_TIME);
   int time_w = adv_width(timeStr);
+  // 12-hour mode: the leading cell only ever holds a '1' or nothing, and
+  // the '1' is just segments B/C at the far right of its cell. Reserve only
+  // that ink (like the CYD face): shrink the field by the '1' glyph's left
+  // bearing and draw the string that much further left, so the blank part
+  // of the leading cell hangs outside the field and nothing looks pushed right.
+  int lead_blank = 0;
+#if TIME_12H
+  lead_blank = u8g2_GetXOffsetGlyph(u8g2.getU8g2(), '1');
+  time_w -= lead_blank;
+#endif
   u8g2.setFont(FONT_SEC);
   int col_w = adv_width(secStr);
 #if TIME_12H
@@ -314,7 +324,7 @@ static void draw_clock(const struct tm & t) {
 #endif
   x = (SCREEN_W - (time_w + COL_GAP + col_w)) / 2;
   u8g2.setFont(FONT_TIME);
-  u8g2.drawStr(x, TIME_Y, timeStr);
+  u8g2.drawStr(x - lead_blank, TIME_Y, timeStr);
   int col_x = x + time_w + COL_GAP;
 #if TIME_12H
   u8g2.setFont(FONT_AMPM);
