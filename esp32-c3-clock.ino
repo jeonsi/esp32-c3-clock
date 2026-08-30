@@ -12,10 +12,9 @@
 
     Screen (a 128x64 rendition of the CYD digital face, everything centred):
 
-        2026-08-30 (일)          DSEG7 Italic 11px date (extra slant, see
-                                 tools/gen_fonts.sh) + 굴림 12px weekday,
+        2026-08-30 (일)          DSEG7 Italic 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
-                        PM       DSEG14 Italic 10px (TIME_12H)
+                        PM       DSEG14 Italic 11px (TIME_12H)
         11:58           ──       DSEG7 Bold Italic 28px HH:MM
                         42       DSEG7 Italic 11px seconds
         추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
@@ -29,7 +28,8 @@
         public holidays 2026-2030) is korean_calendar.h copied verbatim from
         the CYD clock; refresh it from there when the years run out
       - the DSEG fonts are generated from the TTFs by tools/gen_fonts.sh
-        (U8g2 format, ~700 bytes total); the Korean font is U8g2's built-in
+        (U8g2 format, ~800 bytes total, all sheared to the same ~14 degree
+        slant); the Korean font is U8g2's built-in
         u8g2_font_gulim12_t_korean2 (~60 KB; korean1 lacks 11 needed glyphs)
 */
 
@@ -58,7 +58,7 @@ const char* password = WIFI_PASSWORD;
 #define FONT_DATE    font_dseg7_i_11              // 11px tall slanted digits, "0-9" "-" "."
 #define FONT_TIME    font_dseg7_bi_28             // 29px tall digits, "0-9" ":" " "
 #define FONT_SEC     font_dseg7_i_11
-#define FONT_AMPM    font_dseg14_i_10             // "A" "M" "P"
+#define FONT_AMPM    font_dseg14_i_11             // 10px tall "A" "M" "P"
 #define FONT_STATUS  u8g2_font_6x12_tf            // boot screen, "!" / "*"
 
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
@@ -67,7 +67,7 @@ const char* password = WIFI_PASSWORD;
 #define DATE_Y       12                           // "(일)"
 #define DATE_NUM_Y   13                           // "2026-08-30"
 #define TIME_Y       47
-#define AMPM_Y       28                           // top of AM/PM aligned with the digits' top
+#define AMPM_Y       29                           // top of AM/PM (y 18..28) aligned with the digits' top
 #define SEP_Y        31                           // rule between AM/PM and seconds
 #define SEC_Y        47                           // seconds bottom-aligned with the digits
 #define BOTTOM_Y     61                           // Hangul

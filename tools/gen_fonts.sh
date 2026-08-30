@@ -12,9 +12,12 @@ cat > $OUT <<'HDR'
  *
  *   font_dseg7_bi_28  - DSEG7 Classic Bold Italic 28 px, "0123456789: " (HH:MM; space = digit width)
  *   font_dseg7_i_11   - DSEG7 Classic Italic 11 px, "0123456789-."       (date, seconds, lunar date)
- *                       extra shear 0.25 so the slant is visible at this size; "." given a 4 px cell
- *                       (DSEG's decimal point has advance 0, it is meant to overlay the digit)
- *   font_dseg14_i_10  - DSEG14 Classic Italic 10 px, "AMP"               (AM / PM)
+ *                       "." is given a 4 px cell (DSEG's decimal point has advance 0, it is meant
+ *                       to overlay the digit)
+ *   font_dseg14_i_11  - DSEG14 Classic Italic 11 px, "AMP"               (AM / PM)
+ *
+ * All three get the same extra shear of 0.11 on top of the faces' own ~0.14 slant, so every
+ * digit on the screen leans at the same ~14 degrees (the native slant reads as upright at 11 px).
  *
  * DSEG (c) Keshikan - SIL Open Font License 1.1 (tools/fonts/DSEG-LICENSE.txt)
  */
@@ -23,7 +26,8 @@ cat > $OUT <<'HDR'
 #include <U8g2lib.h>
 
 HDR
-$PY mkfont.py --ttf fonts/DSEG7Classic-BoldItalic-no7F.ttf --size 28 --chars "0123456789: " --space-like 0 --name font_dseg7_bi_28 --out $OUT --append
-$PY mkfont.py --ttf fonts/DSEG7Classic-Italic-no7F.ttf     --size 11 --chars "0123456789-." --shear 0.25 --adv .=4 --xoff .=1 --name font_dseg7_i_11 --out $OUT --append
-$PY mkfont.py --ttf fonts/DSEG14Classic-Italic.ttf          --size 10 --chars "AMP"          --name font_dseg14_i_10 --out $OUT --append
+SHEAR=0.11
+$PY mkfont.py --ttf fonts/DSEG7Classic-BoldItalic-no7F.ttf --size 28 --chars "0123456789: " --space-like 0 --shear $SHEAR --name font_dseg7_bi_28 --out $OUT --append
+$PY mkfont.py --ttf fonts/DSEG7Classic-Italic-no7F.ttf     --size 11 --chars "0123456789-." --shear $SHEAR --adv .=4 --xoff .=1 --name font_dseg7_i_11 --out $OUT --append
+$PY mkfont.py --ttf fonts/DSEG14Classic-Italic.ttf          --size 11 --chars "AMP"          --shear $SHEAR --name font_dseg14_i_11 --out $OUT --append
 echo '#endif /* CLOCK_FONTS_H */' >> $OUT
