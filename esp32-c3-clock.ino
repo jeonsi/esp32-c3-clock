@@ -12,11 +12,11 @@
 
     Screen (a 128x64 rendition of the CYD digital face, everything centred):
 
-        2026-08-30 (일)          DSEG7 Italic 11px date + 굴림 12px weekday,
+        2026-08-30 (일)          DSEG7 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
-                        PM       DSEG14 Italic 11px (TIME_12H)
-        11:58           ──       DSEG7 Bold Italic 28px HH:MM
-                        42       DSEG7 Italic 11px seconds
+                        PM       DSEG14 11px (TIME_12H)
+        11:58           ──       DSEG7 Bold 28px HH:MM
+                        42       DSEG7 11px seconds
         추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
                                  lunar date - "음"/"음 윤" (leap month) in 굴림,
                                  the numbers in the DSEG7 11px - and the solar
@@ -27,9 +27,9 @@
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
         public holidays 2026-2030) is korean_calendar.h copied verbatim from
         the CYD clock; refresh it from there when the years run out
-      - the DSEG fonts are generated from the TTFs by tools/gen_fonts.sh
-        (U8g2 format, ~800 bytes total, all sheared to the same ~14 degree
-        slant); the Korean font is U8g2's built-in
+      - the DSEG fonts (upright faces; the italics looked messy at this
+        resolution) are generated from the TTFs by tools/gen_fonts.sh
+        (U8g2 format, ~500 bytes total); the Korean font is U8g2's built-in
         u8g2_font_gulim12_t_korean2 (~60 KB; korean1 lacks 11 needed glyphs)
 */
 
@@ -54,10 +54,10 @@ const char* password = WIFI_PASSWORD;
 
 // ---- Fonts / layout -------------------------------------------------------
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
-#define FONT_DATE    font_dseg7_i_11              // 11px tall slanted digits, "0-9" "-" "."
-#define FONT_TIME    font_dseg7_bi_28             // 29px tall digits, "0-9" ":" " "
-#define FONT_SEC     font_dseg7_i_11
-#define FONT_AMPM    font_dseg14_i_11             // 10px tall "A" "M" "P"
+#define FONT_DATE    font_dseg7_r_11              // 12px tall digits, "0-9" "-" "."
+#define FONT_TIME    font_dseg7_b_28              // 29px tall digits, "0-9" ":" " "
+#define FONT_SEC     font_dseg7_r_11
+#define FONT_AMPM    font_dseg14_r_11             // 10px tall "A" "M" "P"
 #define FONT_STATUS  u8g2_font_6x12_tf            // boot screen
 
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
@@ -186,6 +186,28 @@ static void draw_str_inverted(int x, int y, const char* s) {
 static void draw_str_hl(int x, int y, const char* s, bool highlight) {
   if (highlight) draw_str_inverted(x, y, s);
   else           u8g2.drawUTF8(x, y, s);
+}
+
+// The SH1106 has 132 columns of RAM and U8g2's driver only ever writes
+// columns 2..129 (the window most 1.3" modules show). A module that shows
+// RAM columns 0..127 keeps whatever columns 0 and 1 held at power-up - a
+// stray ":"-like speck at the left edge that no clearBuffer() can touch.
+// Zero all 132 columns once, in 12-byte I2C transfers.
+static void oled_clear_ram(void) {
+  u8x8_t* u8x8 = u8g2.getU8x8();
+  static uint8_t zeros[12] = { 0 };
+  for (uint8_t page = 0; page < 8; page++) {
+    u8x8_cad_StartTransfer(u8x8);
+    u8x8_cad_SendCmd(u8x8, 0xB0 | page);   // page address
+    u8x8_cad_SendCmd(u8x8, 0x00);          // column address, low nibble  = 0
+    u8x8_cad_SendCmd(u8x8, 0x10);          // column address, high nibble = 0
+    u8x8_cad_EndTransfer(u8x8);
+    for (int col = 0; col < 132; col += sizeof(zeros)) {
+      u8x8_cad_StartTransfer(u8x8);
+      u8x8_cad_SendData(u8x8, sizeof(zeros), zeros);
+      u8x8_cad_EndTransfer(u8x8);
+    }
+  }
 }
 
 // Two-line status screen used while booting
@@ -347,6 +369,7 @@ static void draw_clock(const struct tm & t) {
 void setup() {
   Serial.begin(115200);
   u8g2.begin();
+  oled_clear_ram();
   draw_status("Connecting to Wi-Fi...", "");
 
   WiFi.mode(WIFI_STA);
