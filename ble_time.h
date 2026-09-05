@@ -21,6 +21,9 @@
  *
  * CYD 원본과의 차이: cts_sync_count(성공 횟수)와 ble_time_end()가 추가됨 -
  * 스케치가 라디오를 듀티사이클(동기화 때만 켜기) 할 수 있게 한다.
+ * 또한 수신 페이로드를 hex로 로그하고, 이미 유효한 시계가 있는데
+ * CTS_MAX_JUMP_S 이상 튀는 값은 거부한다(재동기화에서 2026년 시계가
+ * 2024-08-12로 덮어써진 사례의 방어 + 원인 추적용).
  */
 #ifndef BLE_TIME_H
 #define BLE_TIME_H
@@ -32,6 +35,10 @@
 #include <NimBLEDevice.h>
 #include <sys/time.h>
 #include <time.h>
+
+#ifndef CTS_MAX_JUMP_S
+#define CTS_MAX_JUMP_S (24 * 3600)   // 유효한 시계 대비 이보다 크게 튀는 CTS 값은 무시
+#endif
 
 static uint16_t cts_conn            = BLE_HS_CONN_HANDLE_NONE;
 static bool     cts_read_pending    = false;
@@ -53,13 +60,16 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
 
   if (attr != NULL && attr->om != NULL) {
     cts_got_attr = true;
-    Serial.printf("BLE CTS: attr handle %u, %d bytes\n",
-                  attr->handle, OS_MBUF_PKTLEN(attr->om));
     // Exact Time 256: year(2,LE) month day hours minutes seconds
     //                 day_of_week fractions256 adjust_reason
     uint8_t buf[10];
     uint16_t len = 0;
     ble_hs_mbuf_to_flat(attr->om, buf, sizeof(buf), &len);
+    char hex[3 * sizeof(buf) + 1] = "";
+    for (uint16_t i = 0; i < len && i < sizeof(buf); i++)
+      snprintf(hex + i * 3, 4, "%02X ", buf[i]);
+    Serial.printf("BLE CTS: attr handle %u, %d bytes: %s\n",
+                  attr->handle, OS_MBUF_PKTLEN(attr->om), hex);
     if (len >= 7) {
       struct tm t = {};
       t.tm_year  = (buf[0] | (buf[1] << 8)) - 1900;
@@ -70,7 +80,18 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
       t.tm_sec   = buf[6];
       t.tm_isdst = -1;
       time_t epoch = mktime(&t);        // 폰의 현지 시간을 TZ_INFO로 해석
-      if (epoch > 1000000000) {         // sanity: 2001년 이후
+      time_t now = time(nullptr);
+      if (epoch <= 1000000000) {        // sanity: 2001년 이후만 유효
+        Serial.println("BLE CTS: nonsense timestamp, ignored");
+      } else if (now > 1735689600 /* 2025-01-01: 시계가 이미 유효 */ &&
+                 (epoch > now + CTS_MAX_JUMP_S || epoch < now - CTS_MAX_JUMP_S)) {
+        // 유효하게 돌던 시계가 하루 이상 튀는 값은 폰/링크 이상으로 보고
+        // 버린다 - 10초 뒤 재시도가 이어진다. (실제로 재동기화에서 2년 전
+        // 날짜가 내려온 사례가 있음; 위의 hex 로그로 원인을 추적)
+        Serial.printf("BLE CTS: implausible %04d-%02d-%02d %02d:%02d:%02d (clock jump > %d s), ignored\n",
+                      buf[0] | (buf[1] << 8), buf[2], buf[3], buf[4], buf[5], buf[6],
+                      (int)CTS_MAX_JUMP_S);
+      } else {
         struct timeval tv;
         tv.tv_sec  = epoch;
         tv.tv_usec = (len >= 9) ? (suseconds_t)((uint32_t)buf[8] * 1000000UL / 256UL) : 0;
