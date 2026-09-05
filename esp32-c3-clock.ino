@@ -1,19 +1,26 @@
 /*  ESP32-C3 + 0.96" 128x64 OLED (SH1106 / SSD1306, I2C) clock
 
     Time keeping follows the CYD clock (cyd_clock_brightness.ino):
-      - time is kept by the ESP32 system clock and disciplined by SNTP
-        (configTzTime + SNTP_SYNC_MODE_SMOOTH), so it stays accurate
-        between syncs and is slewed instead of jumping when a sync lands
-      - resync every NTP_SYNC_INTERVAL_MS against three servers
-      - non-blocking boot: the OLED shows Wi-Fi / NTP progress and retries
-        forever instead of hanging in a blind while() loop
+      - two time sources, chosen with a very long press (3 s) of the BOOT
+        button and stored in NVS (applies via an immediate restart, since
+        the radio stacks are only initialised at boot):
+          Wi-Fi: SNTP disciplines the system clock (configTzTime +
+            SNTP_SYNC_MODE_SMOOTH), resync every NTP_SYNC_INTERVAL_MS
+          BLE: Current Time Service from a paired iPhone (ble_time.h,
+            copied from the CYD clock; needs NimBLE-Arduino 2.x and the
+            "Huge APP" partition scheme - both stacks are in the binary)
+      - an 8x8 icon at the top-left shows the selected source (BT rune /
+        Wi-Fi arcs) and blinks once per second while the link is down
+      - non-blocking boot: the OLED shows Wi-Fi / BLE / sync progress and
+        retries forever instead of hanging in a blind while() loop
       - the display is redrawn on the second boundary (polled every 50 ms),
         not on a drifting delay(1000)
 
     BOOT button: a short press cycles the faces, a double click switches
-    12/24-hour time, a long press (1 s) toggles night dimming; each change
-    shows a 2 s banner. All three settings are remembered in NVS like the
-    CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
+    12/24-hour time, a long press (1 s) toggles night dimming, a very long
+    press (3 s) switches the time source (BLE <-> Wi-Fi, restarts); each
+    change shows a banner. All four settings are remembered in NVS like
+    the CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
     SCL (default Wire pins are SDA 8 / SCL 9), so the pin is never
     reconfigured with pinMode() - that freezes the display. It is only
     sampled with digitalRead() between frames, when the bus is idle and the
@@ -66,6 +73,8 @@
 #include "esp_sntp.h"
 #include "korean_calendar.h"
 #include "clock_fonts.h"
+// ble_time.h is included after the tunables below - it needs TZ_INFO,
+// NTP_SYNC_INTERVAL_MS and BLE_DEVICE_NAME.
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -75,13 +84,16 @@ const char* password = WIFI_PASSWORD;
 
 // ---- Tunables (same values as the CYD clock_config.h) ---------------------
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
-#define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)     // resync every 30 minutes
+#define NTP_SYNC_INTERVAL_MS (60 * 60 * 1000)     // resync every hour (SNTP and BLE CTS alike)
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
+#define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
+#define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
 #define LONG_PRESS_MS        1000                 // hold this long to toggle night mode instead of the face
+#define SRC_PRESS_MS         3000                 // hold this long to switch the time source (BLE/Wi-Fi) and restart
 #define DOUBLE_CLICK_MS      400                  // second click within this = toggle 12/24 h (single click acts after it)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
@@ -118,7 +130,7 @@ const char* password = WIFI_PASSWORD;
 #define SEC_Y        47                           // seconds bottom-aligned with the digits
 #define BOTTOM_Y     61                           // Hangul
 #define BOTTOM_NUM_Y 62                           // lunar digits
-#define DATE_GAP     6                            // date .. (weekday)
+#define DATE_GAP     4                            // date .. (weekday)
 #define LUNAR_GAP    3                            // "음" .. "8.15"
 #define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
 #define PART_GAP     8                            // between bottom-line items
@@ -141,6 +153,8 @@ const char* password = WIFI_PASSWORD;
 #define SEC_TAIL     5
 #define HUB_R        2
 
+#include "ble_time.h"
+
 // U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
@@ -150,6 +164,12 @@ const char* weekDaysKo[7] = { "일", "월", "화", "수", "목", "금", "토" };
 enum face_t { FACE_DIGITAL, FACE_ANALOG, FACE_COUNT };
 static face_t      face_mode = FACE_DEFAULT;
 static Preferences prefs;
+static bool        time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
+
+// 8x8 time-source icons for the top-left corner (XBM, LSB = leftmost pixel)
+static const uint8_t ICON_BT[8]   = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
+static const uint8_t ICON_WIFI[8] = { 0x7E, 0x81, 0x3C, 0x42, 0x00, 0x18, 0x18, 0x00 };
+#define ICON_AREA 10   // icon column: 8 px icon + 2 px gap, rows 2..9
 
 // ---- Boot state machine ---------------------------------------------------
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
@@ -208,7 +228,7 @@ static void button_poll(void) {
   }
   if (millis() - t_change < 40) return;
   if (level == LOW) {
-    if (seen_high && millis() - t_change < 3000) {   // confirmed press; a >3 s "press" is not one
+    if (seen_high && millis() - t_change < 8000) {   // confirmed press; a >8 s "press" is a stuck pin, not one
       if (!button_down) press_ms = t_change;
       button_down = true;
     } else {
@@ -216,7 +236,10 @@ static void button_poll(void) {
     }
   } else if (button_down) {
     button_down = false;                      // confirmed release: t_change is the release time
-    if (t_change - press_ms >= LONG_PRESS_MS) {
+    if (t_change - press_ms >= SRC_PRESS_MS) {
+      click_pending = false;
+      toggle_source();                        // restarts, does not return
+    } else if (t_change - press_ms >= LONG_PRESS_MS) {
       click_pending = false;
       toggle_night();
     } else if (click_pending && t_change - click_ms <= DOUBLE_CLICK_MS) {
@@ -307,6 +330,21 @@ static void show_banner(const char* text) {
   msg_text = text;
   msg_until_ms = millis() + MSG_MS;
   last_drawn_sec = -1;                      // redraw now
+}
+
+// Switch the time source and restart - the radio stacks (Wi-Fi / NimBLE)
+// are only initialised at boot, like on the CYD.
+static void toggle_source(void) {
+  time_sync_ble = !time_sync_ble;
+  prefs.putInt("tsrc", time_sync_ble ? 1 : 0);
+  Serial.printf("Time source -> %s, restarting\n", time_sync_ble ? "BLE" : "WIFI");
+  const char* text = time_sync_ble ? "BLE 모드로 재시작" : "Wi-Fi 모드로 재시작";
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_KO);
+  u8g2.drawUTF8((SCREEN_W - adv_width(text)) / 2, SCREEN_H / 2 + 5, text);
+  u8g2.sendBuffer();
+  delay(1500);
+  ESP.restart();
 }
 
 static void toggle_12h(void) {
@@ -428,12 +466,13 @@ static void oled_clear_ram(void) {
   }
 }
 
-// Two-line status screen used while booting
-static void draw_status(const char * line1, const char * line2) {
+// Status screen used while booting (line3 optional)
+static void draw_status(const char * line1, const char * line2, const char * line3 = "") {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_STATUS);
-  u8g2.drawStr(0, 24, line1);
-  u8g2.drawStr(0, 44, line2);
+  u8g2.drawStr(0, 20, line1);
+  u8g2.drawStr(0, 38, line2);
+  u8g2.drawStr(0, 56, line3);
   u8g2.sendBuffer();
 }
 
@@ -477,9 +516,16 @@ static void boot_poll(void) {
       }
       if (millis() - last_ui_ms > 1000) {
         last_ui_ms = millis();
-        snprintf(buf, sizeof(buf), "%lus",
-                 (unsigned long)((millis() - boot_t0) / 1000));
-        draw_status("Waiting for time sync...", buf);
+        if (time_sync_ble) {
+          snprintf(buf, sizeof(buf), "%lus  (%s)",
+                   (unsigned long)((millis() - boot_t0) / 1000),
+                   ble_time_connected() ? "connected" : "advertising");
+          draw_status("Waiting for BLE sync...", buf, "Pair: iPhone > Bluetooth");
+        } else {
+          snprintf(buf, sizeof(buf), "%lus",
+                   (unsigned long)((millis() - boot_t0) / 1000));
+          draw_status("Waiting for time sync...", buf);
+        }
       }
       break;
     }
@@ -487,6 +533,14 @@ static void boot_poll(void) {
     default:
       break;
   }
+}
+
+// Time-source icon in the top-left corner: BT rune or Wi-Fi arcs for the
+// selected source, blinking once per second while its link is down.
+static void draw_source_icon(const struct tm & t) {
+  bool up = time_sync_ble ? ble_time_connected() : (WiFi.status() == WL_CONNECTED);
+  if (!up && (t.tm_sec & 1)) return;
+  u8g2.drawXBM(0, 2, 8, 8, time_sync_ble ? ICON_BT : ICON_WIFI);
 }
 
 // ---- Clock face -----------------------------------------------------------
@@ -504,11 +558,13 @@ static void draw_clock(const struct tm & t) {
   int date_w = adv_width(dateStr);
   u8g2.setFont(FONT_KO);
   int wd_w = adv_width(wdStr);
-  int x = (SCREEN_W - (date_w + DATE_GAP + wd_w)) / 2;
+  // centred in the space right of the source icon (116 px row in 118 px)
+  int x = ICON_AREA + (SCREEN_W - ICON_AREA - (date_w + DATE_GAP + wd_w)) / 2;
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x, DATE_NUM_Y, dateStr);
   u8g2.setFont(FONT_KO);
   draw_str_hl(x + date_w + DATE_GAP, DATE_Y, wdStr, day_info.red_day);
+  draw_source_icon(t);
 
   // ---- Row 2: HH:MM big, AM/PM over seconds in a narrow column, all centred
   const char* ampm = t.tm_hour < 12 ? "AM" : "PM";
@@ -641,6 +697,7 @@ static void draw_analog(const struct tm & t) {
   polar(sec_deg + 180.0f, SEC_TAIL, x2, y2);
   u8g2.drawLine(x2, y2, x, y);
   u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
+  draw_source_icon(t);
 
   draw_banner();
   dither_buffer();
@@ -664,7 +721,6 @@ void setup() {
   Serial.begin(115200);
   u8g2.begin();
   oled_clear_ram();
-  draw_status("Connecting to Wi-Fi...", "");
 
 #if FACE_BUTTON_PIN >= 0
   // SDA/SCL are runtime constants in the ESP32 core (not macros - a #if
@@ -682,16 +738,28 @@ void setup() {
   face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
   night_enabled = prefs.getInt("night", NIGHT_ENABLE_DEFAULT) != 0;
   time_12h      = prefs.getInt("h12", TIME_12H_DEFAULT) != 0;
-  Serial.printf("Night mode: %s, time format: %s\n", night_enabled ? "on" : "off", time_12h ? "12h" : "24h");
+  time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE) != 0;
+  Serial.printf("Night mode: %s, time format: %s, time source: %s\n",
+                night_enabled ? "on" : "off", time_12h ? "12h" : "24h",
+                time_sync_ble ? "BLE" : "WIFI");
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid, password);
   boot_t0 = wifi_attempt_ms = millis();
+  if (time_sync_ble) {
+    draw_status("Starting BLE...", "");
+    ble_time_begin();
+    boot_state = BOOT_NTP;               // no Wi-Fi stage; wait for the first CTS read
+    draw_status("Waiting for BLE sync...", "", "Pair: iPhone > Bluetooth");
+  } else {
+    draw_status("Connecting to Wi-Fi...", "");
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(ssid, password);
+  }
 }
 
 void loop() {
   button_poll();
+  if (time_sync_ble) ble_time_tick();   // periodic CTS resync (10 s until first sync, then hourly)
   if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
     delay(50);
     return;
