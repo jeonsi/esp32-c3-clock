@@ -99,6 +99,7 @@ const char* password = WIFI_PASSWORD;
 #define BLE_LINGER_MS        (60 * 1000)          // stay on this long after a sync (first pairing needs the ANCS prompt)
 #define BLE_SYNC_TIMEOUT_MS  (3 * 60 * 1000)      // close a fruitless resync window after this, retry next interval
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
+#define DISPLAY_FLIP         0                    // 1: rotate the screen 180 degrees (clock mounted upside down)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
@@ -172,8 +173,9 @@ const char* password = WIFI_PASSWORD;
 // per-page writes with the SH1106's +2 column offset are neutralised on an
 // SSD1306 by the horizontal-addressing mode that same init sets up. The
 // reverse is not true - the SSD1306 driver uses commands the SH1106 lacks.
-// U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+// DISPLAY_FLIP rotates everything 180 degrees in the frame buffer (U8G2_R2).
+// U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(DISPLAY_FLIP ? U8G2_R2 : U8G2_R0, U8X8_PIN_NONE);
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(DISPLAY_FLIP ? U8G2_R2 : U8G2_R0, U8X8_PIN_NONE);
 
 const char* weekDaysKo[7] = { "일", "월", "화", "수", "목", "금", "토" };
 

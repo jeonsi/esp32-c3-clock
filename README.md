@@ -146,6 +146,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `SYNC_STALE_MS` | 2시간 | 이 시간 동안 동기화가 없으면 소스 아이콘을 반전 표시(Wi-Fi·BLE 공통) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
 | `TIME_12H_DEFAULT` | 1 | 첫 부팅 시 12시간제(1)/24시간제(0). 이후 더블 클릭으로 바꾸고 NVS에 저장 |
+| `DISPLAY_FLIP` | 0 | 1이면 화면을 180° 회전(시계를 뒤집어 설치할 때) |
 | `FACE_DEFAULT` | `FACE_DIGITAL` | 첫 부팅 시 화면 |
 | `FACE_BUTTON_PIN` | 9 | 버튼 핀. BOOT(=SCL) 또는 GND로 연결한 별도 버튼. -1이면 버튼 없음 |
 | `FACE_CYCLE_S` | 0 | >0이면 N초마다 화면 자동 전환(버튼 없는 보드용, NVS에 쓰지 않음) |
