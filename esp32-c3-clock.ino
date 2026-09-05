@@ -718,7 +718,11 @@ static void draw_banner(void) {
 }
 
 void setup() {
+  // 80 MHz is plenty for a 1 Hz clock face and saves a few mA over the
+  // 160 MHz default (the C3 maximum); Wi-Fi/BLE need at least 80 MHz.
+  setCpuFrequencyMhz(80);
   Serial.begin(115200);
+  Serial.printf("CPU %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
   u8g2.begin();
   oled_clear_ram();
 
