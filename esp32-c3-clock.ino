@@ -12,7 +12,7 @@
             With BLE_DUTY_CYCLE the radio runs only around each resync
             (~25 mA saved): bonds survive in NVS, so the iPhone reconnects
             by itself whenever advertising restarts
-      - an 8x8 icon at the top-left shows the selected source (BT rune /
+      - an 8x8 icon at the bottom-left shows the selected source (BT rune /
         Wi-Fi arcs), blinks once per second while the link is down (or, in
         BLE mode, while a resync window waits for the phone), and turns
         into an inverted box once no sync has landed for SYNC_STALE_MS
@@ -201,7 +201,8 @@ static volatile uint32_t last_sync_ok_ms = 0;     // millis() of the last succes
 // 8x8 time-source icons for the top-left corner (XBM, LSB = leftmost pixel)
 static const uint8_t ICON_BT[8]   = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
 static const uint8_t ICON_WIFI[8] = { 0x7E, 0x81, 0x3C, 0x42, 0x00, 0x18, 0x18, 0x00 };
-#define ICON_AREA 10   // icon column: 8 px icon + 2 px gap, rows 2..9
+#define ICON_AREA 10   // icon column at the bottom-left: 8 px icon + 2 px gap
+#define ICON_Y    53   // icon rows 53..60, centred on the bottom line's Hangul body
 
 // ---- Boot state machine ---------------------------------------------------
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
@@ -642,7 +643,8 @@ static void ble_duty_poll(void) {
 #endif
 }
 
-// Time-source icon in the top-left corner: BT rune or Wi-Fi arcs for the
+// Time-source icon in the bottom-left corner (like the CYD's link icon):
+// BT rune or Wi-Fi arcs for the
 // selected source, blinking once per second while its link is down. In BLE
 // mode the radio is off most of the time by design (duty cycle) - that idle
 // state shows a steady icon; it only blinks while a window is waiting.
@@ -652,16 +654,16 @@ static void ble_duty_poll(void) {
 static void draw_source_icon(const struct tm & t) {
   const uint8_t* icon = time_sync_ble ? ICON_BT : ICON_WIFI;
   if (millis() - last_sync_ok_ms > SYNC_STALE_MS) {
-    u8g2.drawBox(0, 1, 10, 10);
+    u8g2.drawBox(0, ICON_Y - 1, 10, 10);
     u8g2.setDrawColor(0);
-    u8g2.drawXBM(1, 2, 8, 8, icon);
+    u8g2.drawXBM(1, ICON_Y, 8, 8, icon);
     u8g2.setDrawColor(1);
     return;
   }
   bool up = time_sync_ble ? (ble_radio_on ? ble_time_connected() : true)
                           : (WiFi.status() == WL_CONNECTED);
   if (!up && (t.tm_sec & 1)) return;
-  u8g2.drawXBM(1, 2, 8, 8, icon);
+  u8g2.drawXBM(1, ICON_Y, 8, 8, icon);
 }
 
 // ---- Clock face -----------------------------------------------------------
@@ -679,8 +681,7 @@ static void draw_clock(const struct tm & t) {
   int date_w = adv_width(dateStr);
   u8g2.setFont(FONT_KO);
   int wd_w = adv_width(wdStr);
-  // centred in the space right of the source icon (116 px row in 118 px)
-  int x = ICON_AREA + (SCREEN_W - ICON_AREA - (date_w + DATE_GAP + wd_w)) / 2;
+  int x = (SCREEN_W - (date_w + DATE_GAP + wd_w)) / 2;
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x, DATE_NUM_Y, dateStr);
   u8g2.setFont(FONT_KO);
@@ -729,11 +730,13 @@ static void draw_clock(const struct tm & t) {
   u8g2.setFont(FONT_SEC);
   u8g2.drawStr(col_x, SEC_Y, secStr);
 
-  // ---- Row 3: [event] lunar term, centred. The event name always fits;
-  // the term is dropped when the line would overflow, then the lunar date.
-  // The lunar date is "음"/"음 윤" in Hangul followed by DSEG digits.
+  // ---- Row 3: [event] lunar term, centred in the space right of the
+  // source icon. The event name always fits; the term is dropped when the
+  // line would overflow, then the lunar date (with the icon reserving 10 px,
+  // the term drops for slightly more holiday names than before; the lunar
+  // date still fits them all). "음"/"음 윤" in Hangul, digits in DSEG.
   {
-    const int W = SCREEN_W - 2;
+    const int W = SCREEN_W - ICON_AREA - 2;
     int kr_w = 0, num_w = 0;
     if (day_info.lunar_num[0]) {
       u8g2.setFont(FONT_KO);   kr_w  = adv_width(day_info.lunar_kr);
@@ -753,7 +756,7 @@ static void draw_clock(const struct tm & t) {
     if (show_term)  { total += term_w;  n++; }
     if (n > 1) total += PART_GAP * (n - 1);
 
-    x = (SCREEN_W - total) / 2;
+    x = ICON_AREA + (SCREEN_W - ICON_AREA - total) / 2;
     if (ev_w) {
       draw_str_hl(x, BOTTOM_Y, day_info.event, day_info.event_holiday);
       x += ev_w + PART_GAP;
