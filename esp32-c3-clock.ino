@@ -109,6 +109,15 @@ const char* password = WIFI_PASSWORD;
 #define DOUBLE_CLICK_MS      400                  // second click within this = toggle 12/24 h (single click acts after it)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
+// Source-side overrides for the button-set settings, for when the BOOT
+// button is hard to reach. -1 = leave the NVS-stored value alone; any other
+// value is written to NVS on every boot. Flash once with the value you want,
+// then set it back to -1 - left in place, the button change is undone on
+// each reboot (the value sticks either way, it is stored in NVS).
+#define OVERRIDE_FACE        -1                   // 0 = digital, 1 = analog
+#define OVERRIDE_NIGHT       -1                   // 0 = night dimming off, 1 = on
+#define OVERRIDE_12H         -1                   // 0 = 24-hour, 1 = 12-hour
+#define OVERRIDE_TIME_SRC    -1                   // 0 = Wi-Fi SNTP, 1 = BLE CTS
 
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      20                   // dim from 20:00 ...
@@ -850,6 +859,23 @@ void setup() {
                 digitalRead(FACE_BUTTON_PIN));
 #endif
   prefs.begin("clock", false);
+  // Push source-side OVERRIDE_* values (see the tunables) into NVS.
+#if OVERRIDE_FACE >= 0
+  prefs.putInt("face", OVERRIDE_FACE);
+  Serial.printf("Override: face = %s\n", OVERRIDE_FACE ? "analog" : "digital");
+#endif
+#if OVERRIDE_NIGHT >= 0
+  prefs.putInt("night", OVERRIDE_NIGHT);
+  Serial.printf("Override: night mode %s\n", OVERRIDE_NIGHT ? "on" : "off");
+#endif
+#if OVERRIDE_12H >= 0
+  prefs.putInt("h12", OVERRIDE_12H);
+  Serial.printf("Override: %s format\n", OVERRIDE_12H ? "12h" : "24h");
+#endif
+#if OVERRIDE_TIME_SRC >= 0
+  prefs.putInt("tsrc", OVERRIDE_TIME_SRC);
+  Serial.printf("Override: time source %s\n", OVERRIDE_TIME_SRC ? "BLE" : "WIFI");
+#endif
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
   face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
   night_enabled = prefs.getInt("night", NIGHT_ENABLE_DEFAULT) != 0;

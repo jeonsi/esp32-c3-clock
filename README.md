@@ -154,6 +154,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `LONG_PRESS_MS` | 1000 | 길게 누름(야간 모드 토글) 판정 시간 |
 | `MSG_MS` | 2000 | 설정 변경 배너 표시 시간 |
 | `NIGHT_ENABLE_DEFAULT` | 1 | 첫 부팅 시 야간 모드 사용 여부. 이후 길게 눌러 바꾸고 NVS에 저장 |
+| `OVERRIDE_FACE` / `OVERRIDE_NIGHT` / `OVERRIDE_12H` / `OVERRIDE_TIME_SRC` | -1 | 버튼 없이 소스에서 설정을 밀어넣는 오버라이드. `-1`이면 NVS 저장값 유지, `0`/`1`을 지정하면 부팅 시 그 값을 NVS에 기록(예: `OVERRIDE_TIME_SRC 0` = Wi-Fi 강제). 값은 NVS에 저장되므로 **한 번 올린 뒤 다시 -1로** 되돌릴 것 — 그대로 두면 버튼으로 바꾼 설정이 재부팅마다 되돌아감 |
 | `NIGHT_FROM_HOUR` / `NIGHT_TO_HOUR` | 22 / 7 | 야간 시간대(자정 넘김 가능). 둘이 같으면 야간 모드 없음 |
 | `CONTRAST_NIGHT` | `0x80` | 야간 컨트라스트(`0x81`). 이 패널 실측: `0x40`부터 희미하게 보이고 `0x80`이 적당 |
 | `NIGHT_PRECHARGE` | `0x11` | 야간 프리차지 기간(`0xD9`). 상위 니블(1~15)이 밝기를 크게 좌우. 낮 값 `0xF1` |
