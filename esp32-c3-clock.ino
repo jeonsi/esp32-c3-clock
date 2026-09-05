@@ -165,6 +165,13 @@ const char* password = WIFI_PASSWORD;
 
 #include "ble_time.h"
 
+// The SH1106 driver also drives SSD1306 modules, so it is the safe pick for
+// both panels this clock has run on (1.3" SH1106 and 0.96" SSD1306): U8g2's
+// SH1106_128X64_NONAME reuses the SSD1306 init sequence (including the
+// SSD1306-only charge-pump command 0x8D, which an SH1106 ignores), and its
+// per-page writes with the SH1106's +2 column offset are neutralised on an
+// SSD1306 by the horizontal-addressing mode that same init sets up. The
+// reverse is not true - the SSD1306 driver uses commands the SH1106 lacks.
 // U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
