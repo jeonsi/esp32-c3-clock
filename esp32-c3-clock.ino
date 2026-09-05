@@ -8,7 +8,10 @@
             SNTP_SYNC_MODE_SMOOTH), resync every NTP_SYNC_INTERVAL_MS
           BLE: Current Time Service from a paired iPhone (ble_time.h,
             copied from the CYD clock; needs NimBLE-Arduino 2.x and the
-            "Huge APP" partition scheme - both stacks are in the binary)
+            "Huge APP" partition scheme - both stacks are in the binary).
+            With BLE_DUTY_CYCLE the radio runs only around each resync
+            (~25 mA saved): bonds survive in NVS, so the iPhone reconnects
+            by itself whenever advertising restarts
       - an 8x8 icon at the top-left shows the selected source (BT rune /
         Wi-Fi arcs) and blinks once per second while the link is down
       - non-blocking boot: the OLED shows Wi-Fi / BLE / sync progress and
@@ -88,6 +91,9 @@ const char* password = WIFI_PASSWORD;
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
 #define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
+#define BLE_DUTY_CYCLE       1                    // 1: BLE radio on only around each resync, 0: always on (CYD style)
+#define BLE_LINGER_MS        (60 * 1000)          // stay on this long after a sync (first pairing needs the ANCS prompt)
+#define BLE_SYNC_TIMEOUT_MS  (3 * 60 * 1000)      // close a fruitless resync window after this, retry next interval
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
 #define FACE_CYCLE_S         0                    // >0: also switch faces automatically every N seconds
@@ -165,6 +171,8 @@ enum face_t { FACE_DIGITAL, FACE_ANALOG, FACE_COUNT };
 static face_t      face_mode = FACE_DEFAULT;
 static Preferences prefs;
 static bool        time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
+static bool        ble_radio_on  = false;
+static uint32_t    ble_window_t0 = 0;             // when the current radio window opened
 
 // 8x8 time-source icons for the top-left corner (XBM, LSB = leftmost pixel)
 static const uint8_t ICON_BT[8]   = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
@@ -535,10 +543,60 @@ static void boot_poll(void) {
   }
 }
 
+// ---- BLE duty cycle --------------------------------------------------------
+// With BLE_DUTY_CYCLE the radio runs only around each resync: once a sync has
+// landed the stack is stopped (bonds live in NVS and survive) and one
+// NTP_SYNC_INTERVAL_MS later it is restarted - the bonded iPhone sees the
+// advertising and reconnects on its own (usually within seconds, sometimes
+// tens of seconds). The window stays open BLE_LINGER_MS past the sync so the
+// very first pairing can finish the ANCS ("알림 공유") step, and a window
+// that never syncs (phone away) closes after BLE_SYNC_TIMEOUT_MS.
+static void ble_duty_poll(void) {
+#if BLE_DUTY_CYCLE
+  static uint32_t last_count = 0;   // cts_sync_count already credited
+  static uint32_t synced_ms  = 0;   // when this window's sync landed (0 = not yet)
+  static uint32_t next_ms    = 0;   // radio off: when to open the next window
+  if (!ble_radio_on) {
+    if ((int32_t)(millis() - next_ms) >= 0) {
+      Serial.println("BLE: radio on for resync");
+      cts_synced_once = false;      // back to the 10 s retry cadence inside the window
+      ble_time_begin();
+      ble_radio_on  = true;
+      ble_window_t0 = millis();
+      synced_ms = 0;
+    }
+    return;
+  }
+  ble_time_tick();                  // periodic CTS read while the radio is on
+  if (cts_sync_count != last_count) {
+    last_count = cts_sync_count;
+    if (!synced_ms) synced_ms = millis();
+  }
+  if (synced_ms && millis() - synced_ms >= BLE_LINGER_MS) {
+    ble_time_end();
+    ble_radio_on = false;
+    next_ms = synced_ms + NTP_SYNC_INTERVAL_MS;
+    Serial.println("BLE: radio off until the next resync");
+  } else if (!synced_ms && boot_state == BOOT_DONE &&
+             millis() - ble_window_t0 >= BLE_SYNC_TIMEOUT_MS) {
+    // during boot (no valid time yet) the window stays open indefinitely
+    ble_time_end();
+    ble_radio_on = false;
+    next_ms = millis() + NTP_SYNC_INTERVAL_MS;
+    Serial.println("BLE: no sync in this window, retrying next interval");
+  }
+#else
+  ble_time_tick();
+#endif
+}
+
 // Time-source icon in the top-left corner: BT rune or Wi-Fi arcs for the
-// selected source, blinking once per second while its link is down.
+// selected source, blinking once per second while its link is down. In BLE
+// mode the radio is off most of the time by design (duty cycle) - that idle
+// state shows a steady icon; it only blinks while a window is waiting.
 static void draw_source_icon(const struct tm & t) {
-  bool up = time_sync_ble ? ble_time_connected() : (WiFi.status() == WL_CONNECTED);
+  bool up = time_sync_ble ? (ble_radio_on ? ble_time_connected() : true)
+                          : (WiFi.status() == WL_CONNECTED);
   if (!up && (t.tm_sec & 1)) return;
   u8g2.drawXBM(0, 2, 8, 8, time_sync_ble ? ICON_BT : ICON_WIFI);
 }
@@ -751,6 +809,8 @@ void setup() {
   if (time_sync_ble) {
     draw_status("Starting BLE...", "");
     ble_time_begin();
+    ble_radio_on  = true;
+    ble_window_t0 = millis();
     boot_state = BOOT_NTP;               // no Wi-Fi stage; wait for the first CTS read
     draw_status("Waiting for BLE sync...", "", "Pair: iPhone > Bluetooth");
   } else {
@@ -763,7 +823,7 @@ void setup() {
 
 void loop() {
   button_poll();
-  if (time_sync_ble) ble_time_tick();   // periodic CTS resync (10 s until first sync, then hourly)
+  if (time_sync_ble) ble_duty_poll();   // CTS resync + radio duty cycle
   if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
     delay(50);
     return;
