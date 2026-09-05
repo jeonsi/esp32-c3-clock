@@ -77,6 +77,7 @@
 #include <math.h>
 #include "time.h"
 #include "esp_sntp.h"
+#include "esp_bt.h"     // esp_bt_controller_mem_release() on Wi-Fi boots
 #include "korean_calendar.h"
 #include "clock_fonts.h"
 // ble_time.h is included after the tunables below - it needs TZ_INFO,
@@ -867,6 +868,15 @@ void setup() {
     boot_state = BOOT_NTP;               // no Wi-Fi stage; wait for the first CTS read
     draw_status("Waiting for BLE sync...", "", "Pair: iPhone > Bluetooth");
   } else {
+    // The linked-in BLE controller statically reserves DRAM even when it is
+    // never initialized. A Wi-Fi boot keeps BLE off until the next reboot
+    // (switching the time source reboots anyway), so hand that memory back
+    // to the heap - same patch as the CYD clock, where LVGL needed it; here
+    // it is simply free RAM.
+    uint32_t heap_before = ESP.getFreeHeap();
+    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);   // C3: BLE-only controller
+    Serial.printf("Free heap: %u -> %u after BT release\n",
+                  (unsigned)heap_before, (unsigned)ESP.getFreeHeap());
     draw_status("Connecting to Wi-Fi...", "");
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
