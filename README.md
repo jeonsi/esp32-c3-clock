@@ -1,6 +1,6 @@
 # ESP32-C3 OLED Clock
 
-ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. 시간은 **Wi-Fi(SNTP)** 또는 **아이폰과의 BLE CTS 페어링**으로 동기화합니다. [CYD Clock](https://github.com/jeonsi/cyd_clock_brightness)의 디지털/아날로그 화면을 128×64 흑백 화면에 옮긴 것으로, 시간 관리 방식과 음력·절기·공휴일 데이터(`korean_calendar.h`)를 그대로 가져왔습니다. 터치가 없는 대신 보드의 **BOOT 버튼** 하나로 화면 전환·12/24시간·야간 모드를 조작합니다.
+ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. 시간은 **Wi-Fi(SNTP)** 또는 **아이폰과의 BLE CTS 페어링**으로 동기화합니다. [CYD Clock](https://github.com/jeonsi/cyd_clock_brightness)의 디지털/아날로그 화면을 128×64 흑백 화면에 옮긴 것으로, 시간 관리 방식과 음력·절기·공휴일 데이터(`korean_calendar.h`)를 그대로 가져왔습니다. 터치가 없는 대신 보드의 **BOOT 버튼** 하나로 화면 전환·12/24시간·야간 모드·시간 동기화 방식(BLE/Wi-Fi)을 조작합니다.
 
 ## 화면 구성
 
