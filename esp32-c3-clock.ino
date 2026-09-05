@@ -109,7 +109,7 @@ const char* password = WIFI_PASSWORD;
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
 
 // Night dimming (by the clock; the C3 board has no light sensor)
-#define NIGHT_FROM_HOUR      22                   // dim from 22:00 ...
+#define NIGHT_FROM_HOUR      20                   // dim from 20:00 ...
 #define NIGHT_TO_HOUR        7                    // ... until 07:00 (may wrap past midnight)
 // Night panel settings (day restores U8g2's init values 0xCF / 0xF1 / 0x40).
 // Brightness is mostly set by the pre-charge phase-2 length (0xD9 high
@@ -383,16 +383,36 @@ static void panel_cmd2(uint8_t cmd, uint8_t arg) {
   u8x8_cad_EndTransfer(u8x8);
 }
 
+static void panel_cmd1(uint8_t cmd) {
+  u8x8_t* u8x8 = u8g2.getU8x8();
+  u8x8_cad_StartTransfer(u8x8);
+  u8x8_cad_SendCmd(u8x8, cmd);
+  u8x8_cad_EndTransfer(u8x8);
+}
+
 // Called once per redraw; only talks to the panel when the state changes.
+// Some panels (the 1.3" SH1106 module, unlike the 0.96" one) go black when
+// 0xD9/0xDB/0x81 are rewritten while the display is running, so (a) the
+// first "day" application is skipped - after u8g2.begin() the panel is
+// already in the day state - and (b) real transitions are wrapped in
+// display-off/on, the same condition the init sequence writes them under.
 static void apply_brightness(const struct tm & t) {
   static int applied = -1;              // -1 = nothing sent yet
   int want = (night_enabled && is_night(t.tm_hour)) ? 1 : 0;
   if (want == applied) return;
+#if !NIGHT_OFF
+  if (applied == -1 && want == 0) {     // boot in daytime: panel is already there
+    applied = 0;
+    night_now = false;
+    return;
+  }
+#endif
   applied = want;
   night_now = want;
 #if NIGHT_OFF
   u8g2.setPowerSave(want);              // 1 = display off (RAM kept, redraws continue unseen)
 #else
+  panel_cmd1(0xAE);                     // display off while the analog settings change
   if (want) {
     panel_cmd2(0xD9, NIGHT_PRECHARGE);  // pre-charge period
     panel_cmd2(0xDB, NIGHT_VCOMH);      // VCOMH deselect level
@@ -402,6 +422,7 @@ static void apply_brightness(const struct tm & t) {
     panel_cmd2(0xDB, 0x40);
     panel_cmd2(0x81, 0xCF);
   }
+  panel_cmd1(0xAF);                     // display on
 #endif
   Serial.printf("Brightness: %s\n", want ? "night" : "day");
 }
