@@ -13,7 +13,10 @@
             (~25 mA saved): bonds survive in NVS, so the iPhone reconnects
             by itself whenever advertising restarts
       - an 8x8 icon at the top-left shows the selected source (BT rune /
-        Wi-Fi arcs) and blinks once per second while the link is down
+        Wi-Fi arcs), blinks once per second while the link is down (or, in
+        BLE mode, while a resync window waits for the phone), and turns
+        into an inverted box once no sync has landed for SYNC_STALE_MS
+        (2 intervals) - the time shown is then getting stale
       - non-blocking boot: the OLED shows Wi-Fi / BLE / sync progress and
         retries forever instead of hanging in a blind while() loop
       - the display is redrawn on the second boundary (polled every 50 ms),
@@ -88,6 +91,7 @@ const char* password = WIFI_PASSWORD;
 // ---- Tunables (same values as the CYD clock_config.h) ---------------------
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
 #define NTP_SYNC_INTERVAL_MS (60 * 60 * 1000)     // resync every hour (SNTP and BLE CTS alike)
+#define SYNC_STALE_MS        (2UL * NTP_SYNC_INTERVAL_MS)  // no sync for this long -> inverted source icon
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
 #define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
@@ -173,6 +177,7 @@ static Preferences prefs;
 static bool        time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
 static bool        ble_radio_on  = false;
 static uint32_t    ble_window_t0 = 0;             // when the current radio window opened
+static volatile uint32_t last_sync_ok_ms = 0;     // millis() of the last successful sync (0 = none since boot)
 
 // 8x8 time-source icons for the top-left corner (XBM, LSB = leftmost pixel)
 static const uint8_t ICON_BT[8]   = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
@@ -305,6 +310,7 @@ static void update_day_info(const struct tm & t) {
 
 void time_sync_notification_cb(struct timeval * tv) {
   (void)tv;
+  last_sync_ok_ms = millis();
   struct tm t;
   time_t now = time(nullptr);
   localtime_r(&now, &t);
@@ -570,6 +576,7 @@ static void ble_duty_poll(void) {
   ble_time_tick();                  // periodic CTS read while the radio is on
   if (cts_sync_count != last_count) {
     last_count = cts_sync_count;
+    last_sync_ok_ms = millis();
     if (!synced_ms) synced_ms = millis();
   }
   if (synced_ms && millis() - synced_ms >= BLE_LINGER_MS) {
@@ -587,6 +594,11 @@ static void ble_duty_poll(void) {
   }
 #else
   ble_time_tick();
+  static uint32_t seen_count = 0;
+  if (cts_sync_count != seen_count) {
+    seen_count = cts_sync_count;
+    last_sync_ok_ms = millis();
+  }
 #endif
 }
 
@@ -594,11 +606,22 @@ static void ble_duty_poll(void) {
 // selected source, blinking once per second while its link is down. In BLE
 // mode the radio is off most of the time by design (duty cycle) - that idle
 // state shows a steady icon; it only blinks while a window is waiting.
+// Once nothing has synced for SYNC_STALE_MS (counted from boot when no sync
+// has landed yet, e.g. after a soft restart with a still-valid clock) the
+// icon becomes an inverted box: the displayed time is free-running.
 static void draw_source_icon(const struct tm & t) {
+  const uint8_t* icon = time_sync_ble ? ICON_BT : ICON_WIFI;
+  if (millis() - last_sync_ok_ms > SYNC_STALE_MS) {
+    u8g2.drawBox(0, 1, 10, 10);
+    u8g2.setDrawColor(0);
+    u8g2.drawXBM(1, 2, 8, 8, icon);
+    u8g2.setDrawColor(1);
+    return;
+  }
   bool up = time_sync_ble ? (ble_radio_on ? ble_time_connected() : true)
                           : (WiFi.status() == WL_CONNECTED);
   if (!up && (t.tm_sec & 1)) return;
-  u8g2.drawXBM(0, 2, 8, 8, time_sync_ble ? ICON_BT : ICON_WIFI);
+  u8g2.drawXBM(1, 2, 8, 8, icon);
 }
 
 // ---- Clock face -----------------------------------------------------------
