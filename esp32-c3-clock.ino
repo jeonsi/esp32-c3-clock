@@ -127,6 +127,7 @@ const char* password = WIFI_PASSWORD;
 #define CHIME_GAP_MS         60                   // ... and the gap between the two beeps
 #define CHIME_FROM_HOUR      7                    // chime only between these hours (inclusive) ...
 #define CHIME_TO_HOUR        22                   // ... so the night stays quiet
+#define SPK_TEST             0                    // 1: skip the clock, sweep test tones forever (wiring/frequency check)
 // Source-side overrides for the button-set settings, for when the BOOT
 // button is hard to reach. -1 = leave the NVS-stored value alone; any other
 // value is written to NVS on every boot. Flash once with the value you want,
@@ -939,8 +940,23 @@ void setup() {
   pinMode(SPK_GND_PIN, OUTPUT);        // virtual ground for the piezo's other leg
   digitalWrite(SPK_GND_PIN, LOW);      // (a piezo draws so little that a GPIO can sink it)
 #endif
-  ledcAttach(SPK_PIN, CHIME_TONE_HZ, 10);
+  bool spk_ok = ledcAttach(SPK_PIN, CHIME_TONE_HZ, 10);
   ledcWriteTone(SPK_PIN, 0);
+  Serial.printf("Buzzer on GPIO%d (%s), gnd pin %d\n", SPK_PIN, spk_ok ? "LEDC ok" : "LEDC ATTACH FAILED", SPK_GND_PIN);
+#if SPK_TEST
+  // Wiring / frequency finder: sweep tones forever, 1 s each, loudest wins.
+  draw_status("Buzzer test...", "watch the serial log");
+  for (;;) {
+    static const uint32_t HZ[] = { 1000, 2000, 2500, 3000, 4000, 5000 };
+    for (size_t i = 0; i < sizeof(HZ) / sizeof(HZ[0]); i++) {
+      Serial.printf("SPK_TEST: %lu Hz\n", (unsigned long)HZ[i]);
+      spk_tone(HZ[i]);
+      delay(700);
+      spk_tone(0);
+      delay(300);
+    }
+  }
+#endif
 #if BOOT_BEEP
   chime_beeps();                       // hear it once at boot = wiring is good
 #endif
