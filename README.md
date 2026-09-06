@@ -88,7 +88,7 @@ ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. �
 | 보드 | ESP32-C3 개발보드 (Arduino 보드 `ESP32C3 Dev Module`) |
 | 디스플레이 | 128×64 OLED, I2C — SDA **GPIO8**, SCL **GPIO9** (ESP32-C3 Arduino 코어의 기본 `Wire` 핀). 1.3" SH1106과 0.96" SSD1306 모듈 모두에서 동작 확인 |
 | 버튼 | 보드의 BOOT 버튼 = **GPIO9** (SCL과 공유, 위 설명 참고) |
-| 부저 (선택) | 수동 피에조를 **GPIO10**(`SPK_PIN`)과 GND에 직결 — 피에조는 전류를 거의 먹지 않아 GPIO 직결로 충분. 능동 부저(자체 발진)는 전류를 많이 먹어 트랜지스터 구동 필요. 없으면 `SPK_PIN -1` |
+| 부저 (선택) | 수동 피에조를 **GPIO10**(`SPK_PIN`)과 GND에 직결 — 피에조는 전류를 거의 먹지 않아 GPIO 직결로 충분. SuperMini는 GND 핀이 1개뿐이라 OLED와 나눠 써야 하는데, 대신 `SPK_GND_PIN 20`으로 두면 **GPIO20을 LOW로 고정해 가상 GND**로 쓰므로 피에조를 나란한 10–20 두 핀에 바로 꽂으면 됨. 능동 부저(자체 발진)는 전류를 많이 먹어 트랜지스터 구동 필요. 없으면 `SPK_PIN -1` |
 
 주의:
 
@@ -168,6 +168,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `NIGHT_VCOMH` | `0x00` | 야간 VCOMH(`0xDB`). 낮 값 `0x40` |
 | `NIGHT_DITHER` | 0 | 1이면 야간에 픽셀 절반만 켬(체커보드) |
 | `SPK_PIN` | 10 | 피에조 부저 핀(GND와 직결). -1이면 부저 기능 제거 |
+| `SPK_GND_PIN` | -1 | 피에조 반대쪽 다리용 가상 GND(LOW로 고정할 GPIO). GND 핀이 모자라면 20 권장(GPIO10 옆) |
 | `BOOT_BEEP` | 1 | 부팅 시 배선 확인용 "삐삑" 1회 |
 | `HOURLY_CHIME` | 1 | 매 정시 "삐삑". 0으로 끔 |
 | `CHIME_TONE_HZ` | 2500 | 시보 주파수 — 부저 공진에 맞춰 조정 |
