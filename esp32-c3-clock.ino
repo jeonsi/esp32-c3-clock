@@ -117,9 +117,10 @@ const char* password = WIFI_PASSWORD;
 // Piezo buzzer (passive piezo between SPK_PIN and GND; it draws almost no
 // current, so the GPIO drives it directly). Same values as the CYD clock.
 #define SPK_PIN              10                   // -1 = no buzzer
-#define SPK_GND_PIN          -1                   // virtual ground: a GPIO held LOW as the piezo's other leg
-                                                  // (the SuperMini has a single GND pin; GPIO20 sits right next
-                                                  //  to GPIO10, so the piezo can plug straight across 10-20)
+#define SPK_GND_PIN          20                   // virtual ground: a GPIO held LOW as the piezo's other leg
+                                                  // (the SuperMini has a single GND pin and the OLED uses it; GPIO20
+                                                  //  sits right next to GPIO10, so the piezo plugs straight across
+                                                  //  the two pins). -1 = the piezo is wired to the real GND instead.
 #define BOOT_BEEP            1                    // double beep at boot to verify the wiring
 #define HOURLY_CHIME         1                    // Casio-style "삐삑" on every full hour
 #define CHIME_TONE_HZ        2500                 // piezo resonance is usually 2-4 kHz - pick the loudest
