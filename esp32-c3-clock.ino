@@ -97,7 +97,8 @@ const char* password = WIFI_PASSWORD;
 #define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
 #define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
 #define BLE_DUTY_CYCLE       1                    // 1: BLE radio on only around each resync, 0: always on (CYD style)
-#define BLE_LINGER_MS        (60 * 1000)          // stay on this long after a sync (first pairing needs the ANCS prompt)
+#define BLE_LINGER_MS        (60 * 1000)          // UPPER BOUND on-time after a sync (first pairing needs the ANCS prompt)
+#define BLE_SETTLE_MS        (2 * 1000)           // once synced AND ANCS-subscribed, close the window after this instead
 #define BLE_SYNC_TIMEOUT_MS  (3 * 60 * 1000)      // close a fruitless resync window after this, retry next interval
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define DISPLAY_FLIP         0                    // 1: rotate the screen 180 degrees (clock mounted upside down)
@@ -595,8 +596,12 @@ static void boot_poll(void) {
 // landed the stack is stopped (bonds live in NVS and survive) and one
 // NTP_SYNC_INTERVAL_MS later it is restarted - the bonded iPhone sees the
 // advertising and reconnects on its own (usually within seconds, sometimes
-// tens of seconds). The window stays open BLE_LINGER_MS past the sync so the
-// very first pairing can finish the ANCS ("알림 공유") step, and a window
+// tens of seconds). Once the sync has landed AND the ANCS subscription
+// succeeded (iOS refuses the CCCD write until 알림 공유 is granted, so success
+// doubles as "not mid-first-pairing"), the window closes BLE_SETTLE_MS later -
+// keeping it open longer only invites connect/drop churn on a flaky link.
+// Without a subscription it stays open up to BLE_LINGER_MS past the sync so
+// the very first pairing can finish the ANCS ("알림 공유") step, and a window
 // that never syncs (phone away) closes after BLE_SYNC_TIMEOUT_MS.
 static void ble_duty_poll(void) {
 #if BLE_DUTY_CYCLE
@@ -620,11 +625,14 @@ static void ble_duty_poll(void) {
     last_sync_ok_ms = millis();
     if (!synced_ms) synced_ms = millis();
   }
-  if (synced_ms && millis() - synced_ms >= BLE_LINGER_MS) {
+  bool early = synced_ms && ancs_subscribed && !ancs_busy &&
+               millis() - synced_ms >= BLE_SETTLE_MS;
+  if (synced_ms && (early || millis() - synced_ms >= BLE_LINGER_MS)) {
     ble_time_end();
     ble_radio_on = false;
     next_ms = synced_ms + NTP_SYNC_INTERVAL_MS;
-    Serial.println("BLE: radio off until the next resync");
+    Serial.println(early ? "BLE: synced and subscribed - radio off early"
+                         : "BLE: radio off until the next resync");
   } else if (!synced_ms && boot_state == BOOT_DONE &&
              millis() - ble_window_t0 >= BLE_SYNC_TIMEOUT_MS) {
     // during boot (no valid time yet) the window stays open indefinitely

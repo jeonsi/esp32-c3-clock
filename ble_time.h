@@ -47,6 +47,7 @@ static uint32_t cts_sync_count      = 0;     // 성공한 동기화 횟수 (듀�
 static uint32_t cts_last_attempt_ms = 0;
 static bool     ancs_attempted      = false;    // 이 연결에서 ANCS 구독을 시도했는가
 static bool     ancs_busy           = false;    // ANCS 탐색/구독 절차가 진행 중인가
+static bool     ancs_subscribed     = false;    // 이번 라디오 온 구간에서 CCCD 구독까지 성공했는가
 
 static void ancs_subscribe_begin(uint16_t conn);   // 아래 ANCS 절 참고
 
@@ -167,9 +168,10 @@ static int ancs_cccd_write_cb(uint16_t conn, const struct ble_gatt_error *error,
   (void)conn; (void)attr; (void)arg;
   ancs_busy = false;                              // 절차 종료(성공/실패 공통)
   int status = error ? error->status : 0;
-  if (status == 0)
+  if (status == 0) {
+    ancs_subscribed = true;                       // 구독 성공 = 알림 공유 권한도 유효
     Serial.println("BLE ANCS: subscribed (iOS will auto-reconnect from now on)");
-  else
+  } else
     Serial.printf("BLE ANCS: subscribe failed (status 0x%04x)\n", status);
   return 0;
 }
@@ -342,6 +344,7 @@ static void ble_time_end(void) {
   cts_read_pending = false;
   ancs_attempted = false;
   ancs_busy = false;
+  ancs_subscribed = false;
   NimBLEDevice::deinit(true);
   Serial.println("BLE: stack stopped");
 }
