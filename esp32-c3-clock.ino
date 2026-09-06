@@ -117,6 +117,9 @@ const char* password = WIFI_PASSWORD;
 // Piezo buzzer (passive piezo between SPK_PIN and GND; it draws almost no
 // current, so the GPIO drives it directly). Same values as the CYD clock.
 #define SPK_PIN              10                   // -1 = no buzzer
+#define SPK_GND_PIN          -1                   // virtual ground: a GPIO held LOW as the piezo's other leg
+                                                  // (the SuperMini has a single GND pin; GPIO20 sits right next
+                                                  //  to GPIO10, so the piezo can plug straight across 10-20)
 #define BOOT_BEEP            1                    // double beep at boot to verify the wiring
 #define HOURLY_CHIME         1                    // Casio-style "삐삑" on every full hour
 #define CHIME_TONE_HZ        2500                 // piezo resonance is usually 2-4 kHz - pick the loudest
@@ -932,6 +935,10 @@ void setup() {
                 time_sync_ble ? "BLE" : "WIFI");
 
 #if SPK_PIN >= 0
+#if SPK_GND_PIN >= 0
+  pinMode(SPK_GND_PIN, OUTPUT);        // virtual ground for the piezo's other leg
+  digitalWrite(SPK_GND_PIN, LOW);      // (a piezo draws so little that a GPIO can sink it)
+#endif
   ledcAttach(SPK_PIN, CHIME_TONE_HZ, 10);
   ledcWriteTone(SPK_PIN, 0);
 #if BOOT_BEEP
