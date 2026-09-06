@@ -60,6 +60,9 @@
         pre-charge, VCOMH and contrast together and restores the init values
         by day. NIGHT_DITHER additionally lights only every other pixel;
         NIGHT_OFF switches the panel off instead.
+      - hourly chime: two short beeps on the hour (CHIME_FROM_HOUR..
+        CHIME_TO_HOUR, default 7-22) on a passive piezo between SPK_PIN
+        (GPIO10) and GND, like the CYD; BOOT_BEEP sounds it once at boot
       - Wi-Fi drops and SNTP syncs are only logged to Serial; the faces
         themselves have no status marker
       - the calendar data (lunar 2025-2045, KST solar terms 2026-2035,
@@ -110,6 +113,17 @@ const char* password = WIFI_PASSWORD;
 #define DOUBLE_CLICK_MS      400                  // second click within this = toggle 12/24 h (single click acts after it)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
+
+// Piezo buzzer (passive piezo between SPK_PIN and GND; it draws almost no
+// current, so the GPIO drives it directly). Same values as the CYD clock.
+#define SPK_PIN              10                   // -1 = no buzzer
+#define BOOT_BEEP            1                    // double beep at boot to verify the wiring
+#define HOURLY_CHIME         1                    // Casio-style "삐삑" on every full hour
+#define CHIME_TONE_HZ        2500                 // piezo resonance is usually 2-4 kHz - pick the loudest
+#define CHIME_BEEP_MS        60                   // beep length ...
+#define CHIME_GAP_MS         60                   // ... and the gap between the two beeps
+#define CHIME_FROM_HOUR      7                    // chime only between these hours (inclusive) ...
+#define CHIME_TO_HOUR        22                   // ... so the night stays quiet
 // Source-side overrides for the button-set settings, for when the BOOT
 // button is hard to reach. -1 = leave the NVS-stored value alone; any other
 // value is written to NVS on every boot. Flash once with the value you want,
@@ -346,6 +360,27 @@ static void sntp_begin(void) {
   configTzTime(TZ_INFO, "kr.pool.ntp.org", "pool.ntp.org", "time.google.com");
   sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
   sntp_restart();                              // apply the new interval
+}
+
+// ---- Buzzer ----------------------------------------------------------------
+static void spk_tone(uint32_t hz) {
+#if SPK_PIN >= 0
+  ledcWriteTone(SPK_PIN, hz);
+#else
+  (void)hz;
+#endif
+}
+
+// Two short beeps, blocking for ~180 ms - fine once an hour (the display
+// redraw for this second has already been sent when this runs).
+static void chime_beeps(void) {
+  spk_tone(CHIME_TONE_HZ);
+  delay(CHIME_BEEP_MS);
+  spk_tone(0);
+  delay(CHIME_GAP_MS);
+  spk_tone(CHIME_TONE_HZ);
+  delay(CHIME_BEEP_MS);
+  spk_tone(0);
 }
 
 // ---- Night dimming --------------------------------------------------------
@@ -896,6 +931,14 @@ void setup() {
                 night_enabled ? "on" : "off", time_12h ? "12h" : "24h",
                 time_sync_ble ? "BLE" : "WIFI");
 
+#if SPK_PIN >= 0
+  ledcAttach(SPK_PIN, CHIME_TONE_HZ, 10);
+  ledcWriteTone(SPK_PIN, 0);
+#if BOOT_BEEP
+  chime_beeps();                       // hear it once at boot = wiring is good
+#endif
+#endif
+
   boot_t0 = wifi_attempt_ms = millis();
   if (time_sync_ble) {
     draw_status("Starting BLE...", "");
@@ -945,6 +988,17 @@ void loop() {
     apply_brightness(t);
     if (face_mode == FACE_ANALOG) draw_analog(t);
     else                          draw_clock(t);
+
+#if HOURLY_CHIME && SPK_PIN >= 0
+    // Hourly chime, like the CYD (and a Casio watch): after the top-of-the-
+    // hour frame is on screen, two short beeps - daytime hours only.
+    static int last_chimed_hour = -1;
+    if (t.tm_min == 0 && t.tm_sec == 0 && t.tm_hour != last_chimed_hour &&
+        t.tm_hour >= CHIME_FROM_HOUR && t.tm_hour <= CHIME_TO_HOUR) {
+      last_chimed_hour = t.tm_hour;
+      chime_beeps();
+    }
+#endif
   }
   delay(50);
 }
