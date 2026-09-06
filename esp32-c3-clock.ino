@@ -947,10 +947,10 @@ void setup() {
   // Wiring / frequency finder: sweep tones forever, 1 s each, loudest wins.
   draw_status("Buzzer test...", "watch the serial log");
   for (;;) {
-    static const uint32_t HZ[] = { 1000, 2000, 2500, 3000, 4000, 5000 };
-    for (size_t i = 0; i < sizeof(HZ) / sizeof(HZ[0]); i++) {
-      Serial.printf("SPK_TEST: %lu Hz\n", (unsigned long)HZ[i]);
-      spk_tone(HZ[i]);
+    static const uint32_t TEST_HZ[] = { 1000, 2000, 2500, 3000, 4000, 5000 };
+    for (size_t i = 0; i < sizeof(TEST_HZ) / sizeof(TEST_HZ[0]); i++) {
+      Serial.printf("SPK_TEST: %lu Hz\n", (unsigned long)TEST_HZ[i]);
+      spk_tone(TEST_HZ[i]);
       delay(700);
       spk_tone(0);
       delay(300);
