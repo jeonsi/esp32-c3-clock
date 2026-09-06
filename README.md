@@ -168,7 +168,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `NIGHT_VCOMH` | `0x00` | 야간 VCOMH(`0xDB`). 낮 값 `0x40` |
 | `NIGHT_DITHER` | 0 | 1이면 야간에 픽셀 절반만 켬(체커보드) |
 | `SPK_PIN` | 10 | 피에조 부저 핀(GND와 직결). -1이면 부저 기능 제거 |
-| `SPK_GND_PIN` | -1 | 피에조 반대쪽 다리용 가상 GND(LOW로 고정할 GPIO). GND 핀이 모자라면 20 권장(GPIO10 옆) |
+| `SPK_GND_PIN` | 20 | 피에조 반대쪽 다리용 가상 GND(LOW로 고정할 GPIO, GPIO10 바로 옆이라 두 핀에 나란히 꽂으면 됨). 진짜 GND에 배선했다면 -1 |
 | `BOOT_BEEP` | 1 | 부팅 시 배선 확인용 "삐삑" 1회 |
 | `HOURLY_CHIME` | 1 | 매 정시 "삐삑". 0으로 끔 |
 | `CHIME_TONE_HZ` | 2500 | 시보 주파수 — 부저 공진에 맞춰 조정 |
