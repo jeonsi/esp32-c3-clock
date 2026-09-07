@@ -110,8 +110,9 @@ const char* password = WIFI_PASSWORD;
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
 #define LONG_PRESS_MS        1000                 // hold this long to toggle night mode instead of the face
 #define SRC_PRESS_MS         3000                 // hold this long to switch the time source (BLE/Wi-Fi) and restart
-#define DOUBLE_CLICK_MS      400                  // multi-click window: 1x face, 2x 12/24 h, 3x mute
-                                                  // (clicks act once the window closes after the last click)
+#define DOUBLE_CLICK_MS      1000                 // multi-click window: 1x face, 2x 12/24 h, 3x mute - clicks up
+                                                  // to this far apart chain, and they act once the window closes
+                                                  // after the last click (so a single click acts this much later)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
 
