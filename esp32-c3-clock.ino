@@ -129,6 +129,7 @@ const char* password = WIFI_PASSWORD;
 #define CHIME_FROM_HOUR      7                    // chime only between these hours (inclusive) ...
 #define CHIME_TO_HOUR        22                   // ... so the night stays quiet
 #define SPK_TEST             0                    // 1: skip the clock, sweep test tones forever (wiring/frequency check)
+#define SOUND_DEFAULT        1                    // all sounds on(1)/muted(0) until overridden (stored in NVS "snd")
 // Source-side overrides for the button-set settings, for when the BOOT
 // button is hard to reach. -1 = leave the NVS-stored value alone; any other
 // value is written to NVS on every boot. Flash once with the value you want,
@@ -138,6 +139,7 @@ const char* password = WIFI_PASSWORD;
 #define OVERRIDE_NIGHT       -1                   // 0 = night dimming off, 1 = on
 #define OVERRIDE_12H         -1                   // 0 = 24-hour, 1 = 12-hour
 #define OVERRIDE_TIME_SRC    -1                   // 0 = Wi-Fi SNTP, 1 = BLE CTS
+#define OVERRIDE_SOUND       -1                   // 0 = muted, 1 = sounds on
 
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      20                   // dim from 20:00 ...
@@ -218,10 +220,14 @@ static bool        ble_radio_on  = false;
 static uint32_t    ble_window_t0 = 0;             // when the current radio window opened
 static volatile uint32_t last_sync_ok_ms = 0;     // millis() of the last successful sync (0 = none since boot)
 
-// 8x8 time-source icons for the top-left corner (XBM, LSB = leftmost pixel)
-static const uint8_t ICON_BT[8]   = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
-static const uint8_t ICON_WIFI[8] = { 0x7E, 0x81, 0x3C, 0x42, 0x00, 0x18, 0x18, 0x00 };
-#define ICON_AREA 10   // icon column at the bottom-left: 8 px icon + 2 px gap
+// 8x8 status icons for the bottom-left corner (XBM, LSB = leftmost pixel)
+static const uint8_t ICON_BT[8]      = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
+static const uint8_t ICON_WIFI[8]    = { 0x7E, 0x81, 0x3C, 0x42, 0x00, 0x18, 0x18, 0x00 };
+static const uint8_t ICON_SPK_ON[8]  = { 0x08, 0x2E, 0x4F, 0x4F, 0x4F, 0x4F, 0x2E, 0x08 };  // speaker + wave
+static const uint8_t ICON_SPK_OFF[8] = { 0x08, 0x0E, 0x0F, 0x0F, 0x0F, 0x0F, 0x0E, 0x08 };  // bare speaker (slash drawn over it)
+// icon column at the bottom-left: source icon, then (with a buzzer) the
+// sound status next to it, like the CYD - 8 px icons with 2 px gaps
+#define ICON_AREA ((SPK_PIN >= 0) ? 20 : 10)
 #define ICON_Y    53   // icon rows 53..60, centred on the bottom line's Hangul body
 
 // ---- Boot state machine ---------------------------------------------------
@@ -368,8 +374,11 @@ static void sntp_begin(void) {
 }
 
 // ---- Buzzer ----------------------------------------------------------------
+static bool sound_on = (SOUND_DEFAULT != 0);   // NVS "snd"; gates every tone
+
 static void spk_tone(uint32_t hz) {
 #if SPK_PIN >= 0
+  if (!sound_on && hz) hz = 0;   // muted: silence requests pass, tones do not (CYD와 동일)
   ledcWriteTone(SPK_PIN, hz);
 #else
   (void)hz;
@@ -714,6 +723,19 @@ static void draw_source_icon(const struct tm & t) {
   u8g2.drawXBM(1, ICON_Y, 8, 8, icon);
 }
 
+// Sound status next to the source icon (CYD와 동일한 배치): speaker with a
+// sound wave while on, the bare speaker with a slash while muted.
+static void draw_sound_icon(void) {
+#if SPK_PIN >= 0
+  if (sound_on) {
+    u8g2.drawXBM(11, ICON_Y, 8, 8, ICON_SPK_ON);
+  } else {
+    u8g2.drawXBM(11, ICON_Y, 8, 8, ICON_SPK_OFF);
+    u8g2.drawLine(11, ICON_Y + 7, 18, ICON_Y);
+  }
+#endif
+}
+
 // ---- Clock face -----------------------------------------------------------
 static void draw_clock(const struct tm & t) {
   char dateStr[16], wdStr[8], timeStr[8], secStr[4];
@@ -735,6 +757,7 @@ static void draw_clock(const struct tm & t) {
   u8g2.setFont(FONT_KO);
   draw_str_hl(x + date_w + DATE_GAP, DATE_Y, wdStr, day_info.red_day);
   draw_source_icon(t);
+  draw_sound_icon();
 
   // ---- Row 2: HH:MM big, AM/PM over seconds in a narrow column, all centred
   const char* ampm = t.tm_hour < 12 ? "AM" : "PM";
@@ -870,6 +893,7 @@ static void draw_analog(const struct tm & t) {
   u8g2.drawLine(x2, y2, x, y);
   u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
   draw_source_icon(t);
+  draw_sound_icon();
 
   draw_banner();
   dither_buffer();
@@ -927,14 +951,19 @@ void setup() {
   prefs.putInt("tsrc", OVERRIDE_TIME_SRC);
   Serial.printf("Override: time source %s\n", OVERRIDE_TIME_SRC ? "BLE" : "WIFI");
 #endif
+#if OVERRIDE_SOUND >= 0
+  prefs.putInt("snd", OVERRIDE_SOUND);
+  Serial.printf("Override: sound %s\n", OVERRIDE_SOUND ? "on" : "muted");
+#endif
   int f = prefs.getInt("face", (int)FACE_DEFAULT);
   face_mode = (f >= 0 && f < FACE_COUNT) ? (face_t)f : FACE_DEFAULT;
   night_enabled = prefs.getInt("night", NIGHT_ENABLE_DEFAULT) != 0;
   time_12h      = prefs.getInt("h12", TIME_12H_DEFAULT) != 0;
   time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE) != 0;
-  Serial.printf("Night mode: %s, time format: %s, time source: %s\n",
+  sound_on      = prefs.getInt("snd", SOUND_DEFAULT) != 0;
+  Serial.printf("Night mode: %s, time format: %s, time source: %s, sound: %s\n",
                 night_enabled ? "on" : "off", time_12h ? "12h" : "24h",
-                time_sync_ble ? "BLE" : "WIFI");
+                time_sync_ble ? "BLE" : "WIFI", sound_on ? "on" : "muted");
 
 #if SPK_PIN >= 0
 #if SPK_GND_PIN >= 0
