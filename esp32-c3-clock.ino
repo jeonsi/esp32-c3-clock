@@ -19,7 +19,7 @@
         (2 intervals) - the time shown is then getting stale
       - non-blocking boot: the OLED shows Wi-Fi / BLE / sync progress and
         retries forever instead of hanging in a blind while() loop
-      - the display is redrawn on the second boundary (polled every 50 ms),
+      - the display is redrawn on the second boundary (polled every 10 ms),
         not on a drifting delay(1000)
 
     BOOT button: a short press cycles the faces, a double click switches
@@ -253,8 +253,8 @@ static void next_face(bool save) {
   set_face((face_t)((face_mode + 1) % FACE_COUNT), save);
 }
 
-// Push button: cycle faces on each press. A level must hold for 40 ms (two
-// 50 ms polls) to count, and the face changes on RELEASE, so that when the
+// Push button: cycle faces on each press. A level must hold for 40 ms of
+// 10 ms polls to count, and the face changes on RELEASE, so that when the
 // button shares the I2C clock line the redraw goes out on a free bus.
 // button_down is true while a confirmed press is held; loop() sends nothing
 // to the OLED during that time.
@@ -939,6 +939,9 @@ void setup() {
   setCpuFrequencyMhz(80);
   Serial.begin(115200);
   Serial.printf("CPU %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
+  u8g2.setBusClock(400000);   // 400 kHz: the 1 KB frame goes out in ~23 ms instead of ~90 ms,
+                              // shrinking the once-a-second window in which the shared-SCL
+                              // button cannot be sampled (fast clicks were getting swallowed)
   u8g2.begin();
   oled_clear_ram();
 
@@ -1041,13 +1044,13 @@ void loop() {
   button_poll();
   if (time_sync_ble) ble_duty_poll();   // CTS resync + radio duty cycle
   if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
-    delay(50);
+    delay(10);
     return;
   }
 
   if (boot_state != BOOT_DONE) {
     boot_poll();
-    delay(50);
+    delay(10);
     return;
   }
 
@@ -1073,5 +1076,5 @@ void loop() {
     }
 #endif
   }
-  delay(50);
+  delay(10);
 }
