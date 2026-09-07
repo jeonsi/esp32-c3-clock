@@ -23,10 +23,10 @@
         not on a drifting delay(1000)
 
     BOOT button: a short press cycles the faces, a double click switches
-    12/24-hour time, a long press (1 s) toggles night dimming, a very long
-    press (3 s) switches the time source (BLE <-> Wi-Fi, restarts); each
-    change shows a banner. All four settings are remembered in NVS like
-    the CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
+    12/24-hour time, a triple click mutes/unmutes the sounds, a long press
+    (1 s) toggles night dimming, a very long press (3 s) switches the time
+    source (BLE <-> Wi-Fi, restarts); each change shows a banner. All five
+    settings are remembered in NVS like the CYD clock. On the ESP32-C3 the BOOT button (GPIO9) is also the OLED's
     SCL (default Wire pins are SDA 8 / SCL 9), so the pin is never
     reconfigured with pinMode() - that freezes the display. It is only
     sampled with digitalRead() between frames, when the bus is idle and the
@@ -110,7 +110,8 @@ const char* password = WIFI_PASSWORD;
 #define FACE_DEFAULT         FACE_DIGITAL         // face used until the button is pressed once
 #define LONG_PRESS_MS        1000                 // hold this long to toggle night mode instead of the face
 #define SRC_PRESS_MS         3000                 // hold this long to switch the time source (BLE/Wi-Fi) and restart
-#define DOUBLE_CLICK_MS      400                  // second click within this = toggle 12/24 h (single click acts after it)
+#define DOUBLE_CLICK_MS      400                  // multi-click window: 1x face, 2x 12/24 h, 3x mute
+                                                  // (clicks act once the window closes after the last click)
 #define MSG_MS               2000                 // how long the "야간 모드 켜짐/꺼짐" banner stays
 #define NIGHT_ENABLE_DEFAULT 1                    // night dimming on until toggled (stored in NVS)
 
@@ -271,13 +272,19 @@ static void button_poll(void) {
   static uint32_t t_change   = 0;
   static bool     seen_high  = false;         // fail-safe: a pin stuck low (miswired, no pull-up) is ignored
   static uint32_t press_ms   = 0;             // when the confirmed press began
-  static bool     click_pending = false;      // one short click seen, waiting for a possible second
-  static uint32_t click_ms   = 0;
+  static uint8_t  click_count = 0;            // short clicks so far, waiting for the window to close
+  static uint32_t click_ms    = 0;
   int level = digitalRead(FACE_BUTTON_PIN);
-  // A lone short click acts once the double-click window has closed.
-  if (click_pending && !button_down && millis() - click_ms > DOUBLE_CLICK_MS) {
-    click_pending = false;
-    next_face(true);
+  // Clicks act once the window has closed after the last click:
+  // 1x = next face, 2x = 12/24 h, 3x (or more) = mute toggle.
+  if (click_count && !button_down && millis() - click_ms > DOUBLE_CLICK_MS) {
+    uint8_t n = click_count;
+    click_count = 0;
+    if (n == 1)      next_face(true);
+    else if (n == 2) toggle_12h();
+#if SPK_PIN >= 0
+    else             toggle_sound();
+#endif
   }
   if (level == HIGH) seen_high = true;
   if (level != last_level) {
@@ -296,16 +303,13 @@ static void button_poll(void) {
   } else if (button_down) {
     button_down = false;                      // confirmed release: t_change is the release time
     if (t_change - press_ms >= SRC_PRESS_MS) {
-      click_pending = false;
+      click_count = 0;
       toggle_source();                        // restarts, does not return
     } else if (t_change - press_ms >= LONG_PRESS_MS) {
-      click_pending = false;
+      click_count = 0;
       toggle_night();
-    } else if (click_pending && t_change - click_ms <= DOUBLE_CLICK_MS) {
-      click_pending = false;                  // second click: 12/24 h
-      toggle_12h();
     } else {
-      click_pending = true;                   // first click: wait for a second one
+      click_count++;                          // count it; act when the window closes
       click_ms = t_change;
     }
   }
@@ -395,6 +399,20 @@ static void chime_beeps(void) {
   spk_tone(CHIME_TONE_HZ);
   delay(CHIME_BEEP_MS);
   spk_tone(0);
+}
+
+// Triple click: mute / unmute everything (NVS "snd"). A short beep confirms
+// unmuting - if you can hear it, the state is right.
+static void toggle_sound(void) {
+  sound_on = !sound_on;
+  prefs.putInt("snd", sound_on ? 1 : 0);
+  show_banner(sound_on ? "소리 켜짐" : "소리 꺼짐");
+  Serial.printf("Sound: %s\n", sound_on ? "on" : "muted");
+  if (sound_on) {
+    spk_tone(CHIME_TONE_HZ);
+    delay(CHIME_BEEP_MS);
+    spk_tone(0);
+  }
 }
 
 // ---- Night dimming --------------------------------------------------------
