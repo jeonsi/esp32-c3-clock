@@ -42,10 +42,11 @@
                         PM       DSEG14 11px (12-hour mode only)
         11:58           ──       DSEG7 Bold 28px HH:MM
                         42       DSEG7 11px seconds
-        추석  음 8.15  추분       굴림 12px: [holiday(inverted) | festival]
-                                 lunar date - "음"/"음 윤" (leap month) in 굴림,
-                                 the numbers in the DSEG7 11px - and the solar
-                                 term (inverted on the day it begins)
+        음 8.15 추분  추석        굴림 12px: lunar date ("음"/"음 윤" in 굴림,
+                                 numbers in DSEG7 11px) and the solar term
+                                 (inverted on the day it begins) packed left
+                                 after the icons; the holiday (inverted) or
+                                 festival name gets the remaining space
 
     Analog: like the CYD analog face, one big dial and nothing else - 62 px
       ring centred on the screen, 12 hour ticks, 12/3/6/9 numerals, tapered
@@ -179,7 +180,8 @@ const char* password = WIFI_PASSWORD;
 #define DATE_GAP     4                            // date .. (weekday)
 #define LUNAR_GAP    3                            // "음" .. "8.15"
 #define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
-#define PART_GAP     8                            // between bottom-line items
+#define TERM_GAP     4                            // lunar date .. solar term (packed tight)
+#define PART_GAP     8                            // before the holiday/festival name
 #define SCREEN_W     128
 #define SCREEN_H     64
 
@@ -821,13 +823,13 @@ static void draw_clock(const struct tm & t) {
   u8g2.setFont(FONT_SEC);
   u8g2.drawStr(col_x, SEC_Y, secStr);
 
-  // ---- Row 3: [event] lunar term, centred in the space right of the
-  // source icon. The event name always fits; the term is dropped when the
-  // line would overflow, then the lunar date (with the icon reserving 10 px,
-  // the term drops for slightly more holiday names than before; the lunar
-  // date still fits them all). "음"/"음 윤" in Hangul, digits in DSEG.
+  // ---- Row 3, packed left after the icons: lunar date, the solar term
+  // right next to it (TERM_GAP), then the holiday/festival name in whatever
+  // space remains - the tight packing is what buys the name its room.
+  // Overflow still drops the term first, then the lunar date; the name
+  // always fits. "음"/"음 윤" in Hangul, digits in DSEG.
   {
-    const int W = SCREEN_W - ICON_AREA - 2;
+    const int W = SCREEN_W - ICON_AREA - 3;   // right of the icons, 1 px spare for the inverted box
     int kr_w = 0, num_w = 0;
     if (day_info.lunar_num[0]) {
       u8g2.setFont(FONT_KO);   kr_w  = adv_width(day_info.lunar_kr);
@@ -837,29 +839,23 @@ static void draw_clock(const struct tm & t) {
     int ev_w    = day_info.event ? adv_width(day_info.event) : 0;
     int lunar_w = num_w ? kr_w + LUNAR_GAP + num_w : 0;
     int term_w  = day_info.term  ? adv_width(day_info.term)  : 0;
-    int ev_gap  = ev_w ? ev_w + PART_GAP : 0;
-    bool show_term  = term_w  && ev_gap + lunar_w + (lunar_w ? PART_GAP : 0) + term_w <= W;
-    bool show_lunar = lunar_w && ev_gap + lunar_w <= W;
+    int ev_gap  = ev_w ? PART_GAP + ev_w : 0;
+    bool show_term  = term_w  && lunar_w + (lunar_w ? TERM_GAP : 0) + term_w + ev_gap <= W;
+    bool show_lunar = lunar_w && lunar_w + ev_gap <= W;
 
-    int total = 0, n = 0;
-    if (ev_w)       { total += ev_w;    n++; }
-    if (show_lunar) { total += lunar_w; n++; }
-    if (show_term)  { total += term_w;  n++; }
-    if (n > 1) total += PART_GAP * (n - 1);
-
-    x = ICON_AREA + (SCREEN_W - ICON_AREA - total) / 2;
-    if (ev_w) {
-      draw_str_hl(x, BOTTOM_Y, day_info.event, day_info.event_holiday);
-      x += ev_w + PART_GAP;
-    }
+    x = ICON_AREA + 1;
     if (show_lunar) {
       u8g2.drawUTF8(x, BOTTOM_Y, day_info.lunar_kr);
       u8g2.setFont(FONT_DATE);
       u8g2.drawStr(x + kr_w + LUNAR_GAP, BOTTOM_NUM_Y, day_info.lunar_num);
       u8g2.setFont(FONT_KO);
-      x += lunar_w + PART_GAP;
+      x += lunar_w + (show_term ? TERM_GAP : PART_GAP);
     }
-    if (show_term) draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
+    if (show_term) {
+      draw_str_hl(x, BOTTOM_Y, day_info.term, day_info.term_today);
+      x += term_w + PART_GAP;
+    }
+    if (ev_w) draw_str_hl(x, BOTTOM_Y, day_info.event, day_info.event_holiday);
   }
 
   draw_banner();
