@@ -96,7 +96,7 @@ const char* password = WIFI_PASSWORD;
 // ---- Tunables (same values as the CYD clock_config.h) ---------------------
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
 #define NTP_SYNC_INTERVAL_MS (60 * 60 * 1000)     // resync every hour (SNTP and BLE CTS alike)
-#define SYNC_STALE_MS        (2UL * NTP_SYNC_INTERVAL_MS)  // no sync for this long -> inverted source icon
+#define SYNC_STALE_MS        (NTP_SYNC_INTERVAL_MS + 5UL * 60 * 1000)  // one missed resync (+5 min grace) -> inverted source icon
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
 #define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
 #define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
