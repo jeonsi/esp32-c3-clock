@@ -39,7 +39,8 @@
 
         2026-08-30 (일)          DSEG7 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
-      P                          DSEG14 11px A/P marker (12-hour mode only)
+      P                          DSEG14 11px PM marker (12-hour mode; AM
+                                 shows nothing, the space stays reserved)
         11:58         42        DSEG7 Bold 28px HH:MM + 18px seconds
                                  (~2/3 height, bottom-aligned)
         음 8.15 추분  추석        굴림 12px: lunar date ("음"/"음 윤" in 굴림,
@@ -781,11 +782,13 @@ static void draw_clock(const struct tm & t) {
   draw_source_icon(t);
   draw_sound_icon();
 
-  // ---- Row 2: [A/P] HH:MM SS, centred as one block. The 12-hour marker is
-  // a single letter top-aligned at the time's top-left; the seconds are
-  // ~2/3 the digit height, bottom-aligned to the right. In 24-hour mode the
-  // marker is absent and COL_GAP collapses so "00:00"+"00" fits in 128 px.
-  const char* ampm = t.tm_hour < 12 ? "A" : "P";
+  // ---- Row 2: [P] HH:MM SS, centred as one block. PM shows a single "P"
+  // top-aligned at the time's top-left; AM shows nothing, but the marker's
+  // space stays reserved so the block does not shift at noon/midnight. The
+  // seconds are ~2/3 the digit height, bottom-aligned to the right. In
+  // 24-hour mode the marker is absent and COL_GAP collapses so
+  // "00:00"+"00" fits in 128 px.
+  const char* ampm = "P";
   if (time_12h) {
     int hh = t.tm_hour % 12;
     if (hh == 0) hh = 12;
@@ -812,12 +815,12 @@ static void draw_clock(const struct tm & t) {
   int ap_w = 0;
   if (time_12h) {
     u8g2.setFont(FONT_AMPM);
-    ap_w = adv_width(ampm) + AP_GAP;
+    ap_w = adv_width(ampm) + AP_GAP;   // reserved in AM too, so nothing moves
   }
   int col_gap = time_12h ? COL_GAP : 0;
   x = (SCREEN_W - (ap_w + time_w + col_gap + sec_w)) / 2;
   if (x < 0) x = 0;
-  if (time_12h) {
+  if (time_12h && t.tm_hour >= 12) {
     u8g2.setFont(FONT_AMPM);
     u8g2.drawStr(x, AMPM_Y, ampm);
   }

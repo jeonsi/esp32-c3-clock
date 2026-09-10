@@ -8,7 +8,7 @@ ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. �
 
 ```
    2026-08-30 (일)          ← 날짜(DSEG7 11px) + 한글 요일(굴림 12px). 빨간날은 요일 반전
- P                          ← A/P 마커 (DSEG14 11px, 12시간제일 때만, 시간 좌측 상단)
+ P                          ← PM 마커 (DSEG14 11px, 시간 좌측 상단). AM은 표시 없음(자리는 유지되어 블록이 안 움직임)
    11:58         42         ← HH:MM (DSEG7 Bold 28px) + 초 (DSEG7 18px, 분 높이의 ~2/3, 하단 정렬)
  ᛒ🔊 음 8.15 추분  추석       ← 시간 소스·사운드 아이콘 + 음력 날짜·현재 절기(절입 당일 반전) + [공휴일(반전) | 세시명절]
 ```
@@ -120,7 +120,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `font_dseg7_b_28` | HH:MM — DSEG7 Classic **Bold** 28px, `0-9 :` 공백(숫자 폭) |
 | `font_dseg7_r_11` | 날짜·음력 숫자 — DSEG7 Classic Regular 11px, `0-9 - .` |
 | `font_dseg7_r_18` | 초 — DSEG7 Classic Regular 18px(분 높이의 ~2/3), `0-9` |
-| `font_dseg14_r_11` | A/P 마커 — DSEG14 Classic Regular 11px, `A M P` |
+| `font_dseg14_r_11` | PM 마커 — DSEG14 Classic Regular 11px, `A M P` |
 
 한글은 U8g2 내장 `u8g2_font_gulim12_t_korean2`(KS X 1001 2,350자, 약 60KB)를 사용합니다. `korean1`(574자)에는 곡·망·백·복·윤·춘·충·칩·토·헌·휴가 없어 절기·요일 표시가 불가능합니다.
 
