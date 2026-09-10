@@ -176,7 +176,7 @@ const char* password = WIFI_PASSWORD;
 #define SEC_Y        47                           // seconds (y 29..46) bottom-aligned with the digits
 #define BOTTOM_Y     61                           // Hangul
 #define BOTTOM_NUM_Y 62                           // lunar digits
-#define DATE_GAP     8                            // weekday .. month-day
+#define DATE_GAP     12                           // weekday .. month-day
 #define LUNAR_GAP    3                            // "음" .. "8.15"
 #define AP_GAP       2                            // A/P marker .. HH:MM
 #define COL_GAP      3                            // HH:MM .. seconds (collapses to 0 in 24-hour mode to fit)
