@@ -16,7 +16,7 @@ cat > $OUT <<'HDR'
  *                       "." is given a 4 px cell (DSEG's decimal point has advance 0, it is meant
  *                       to overlay the digit)
  *   font_dseg7_r_18   - DSEG7 Classic Regular 18 px, "0123456789"   (seconds, ~2/3 of the HH:MM height)
- *   font_dseg14_r_11  - DSEG14 Classic Regular 11 px, "AMP"         (A / P by the time's top-left)
+ *   font_dseg14_r_11  - DSEG14 Classic Regular 11 px               (weekday SUN..SAT + the PM marker)
  *
  * Upright faces, no shear: the slanted versions looked messy at these sizes on a 128x64 OLED.
  * (mkfont.py --shear is still available if you want to try again.)
@@ -31,5 +31,5 @@ HDR
 $PY mkfont.py --ttf fonts/DSEG7Classic-Bold-no7F.ttf    --size 28 --chars "0123456789: " --space-like 0 --name font_dseg7_b_28 --out $OUT --append
 $PY mkfont.py --ttf fonts/DSEG7Classic-Regular-no7F.ttf --size 11 --chars "0123456789-." --adv .=4 --xoff .=1 --name font_dseg7_r_11 --out $OUT --append
 $PY mkfont.py --ttf fonts/DSEG7Classic-Regular-no7F.ttf --size 18 --chars "0123456789"   --name font_dseg7_r_18 --out $OUT --append
-$PY mkfont.py --ttf fonts/DSEG14Classic-Regular.ttf      --size 11 --chars "AMP"          --name font_dseg14_r_11 --out $OUT --append
+$PY mkfont.py --ttf fonts/DSEG14Classic-Regular.ttf      --size 11 --chars "ADEFHIMNOPRSTUW" --name font_dseg14_r_11 --out $OUT --append
 echo '#endif /* CLOCK_FONTS_H */' >> $OUT
