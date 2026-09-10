@@ -39,9 +39,9 @@
 
         2026-08-30 (일)          DSEG7 11px date + 굴림 12px weekday,
                                  weekday inverted on Sunday / public holiday
-                        PM       DSEG14 11px (12-hour mode only)
-        11:58           ──       DSEG7 Bold 28px HH:MM
-                        42       DSEG7 11px seconds
+      P                          DSEG14 11px A/P marker (12-hour mode only)
+        11:58         42        DSEG7 Bold 28px HH:MM + 18px seconds
+                                 (~2/3 height, bottom-aligned)
         음 8.15 추분  추석        굴림 12px: lunar date ("음"/"음 윤" in 굴림,
                                  numbers in DSEG7 11px) and the solar term
                                  (inverted on the day it begins) packed left
@@ -127,7 +127,7 @@ const char* password = WIFI_PASSWORD;
                                                   //   -1 = the piezo is wired to the real GND (still a buzzer!)
 #define BOOT_BEEP            1                    // double beep at boot to verify the wiring
 #define HOURLY_CHIME         1                    // Casio-style "삐삑" on every full hour
-#define CHIME_TONE_HZ        2500                 // piezo resonance is usually 2-4 kHz - pick the loudest
+#define CHIME_TONE_HZ        4000                 // piezo resonance is usually 2-4 kHz - pick the loudest
 #define CHIME_BEEP_MS        60                   // beep length ...
 #define CHIME_GAP_MS         60                   // ... and the gap between the two beeps
 #define CHIME_FROM_HOUR      7                    // chime only between these hours (inclusive) ...
@@ -162,8 +162,8 @@ const char* password = WIFI_PASSWORD;
 #define FONT_KO      u8g2_font_gulim12_t_korean2  // 12px Hangul, ascent 10 / descent 2
 #define FONT_DATE    font_dseg7_r_11              // 12px tall digits, "0-9" "-" "."
 #define FONT_TIME    font_dseg7_b_28              // 29px tall digits, "0-9" ":" " "
-#define FONT_SEC     font_dseg7_r_11
-#define FONT_AMPM    font_dseg14_r_11             // 10px tall "A" "M" "P"
+#define FONT_SEC     font_dseg7_r_18              // 18px tall digits, ~2/3 of the HH:MM height
+#define FONT_AMPM    font_dseg14_r_11             // 10px tall "A" / "P" marker
 #define FONT_STATUS  u8g2_font_6x12_tf            // boot screen
 
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
@@ -172,14 +172,14 @@ const char* password = WIFI_PASSWORD;
 #define DATE_Y       12                           // "(일)"
 #define DATE_NUM_Y   13                           // "2026-08-30"
 #define TIME_Y       47
-#define AMPM_Y       29                           // top of AM/PM (y 18..28) aligned with the digits' top
-#define SEP_Y        31                           // rule between AM/PM and seconds
-#define SEC_Y        47                           // seconds bottom-aligned with the digits
+#define AMPM_Y       29                           // A/P marker (y 18..27) top-aligned with the digits, at their left
+#define SEC_Y        47                           // seconds (y 29..46) bottom-aligned with the digits
 #define BOTTOM_Y     61                           // Hangul
 #define BOTTOM_NUM_Y 62                           // lunar digits
 #define DATE_GAP     4                            // date .. (weekday)
 #define LUNAR_GAP    3                            // "음" .. "8.15"
-#define COL_GAP      4                            // HH:MM .. AM/PM-seconds column
+#define AP_GAP       2                            // A/P marker .. HH:MM
+#define COL_GAP      3                            // HH:MM .. seconds (collapses to 0 in 24-hour mode to fit)
 #define TERM_GAP     4                            // lunar date .. solar term (packed tight)
 #define PART_GAP     8                            // before the holiday/festival name
 #define SCREEN_W     128
@@ -781,8 +781,11 @@ static void draw_clock(const struct tm & t) {
   draw_source_icon(t);
   draw_sound_icon();
 
-  // ---- Row 2: HH:MM big, AM/PM over seconds in a narrow column, all centred
-  const char* ampm = t.tm_hour < 12 ? "AM" : "PM";
+  // ---- Row 2: [A/P] HH:MM SS, centred as one block. The 12-hour marker is
+  // a single letter top-aligned at the time's top-left; the seconds are
+  // ~2/3 the digit height, bottom-aligned to the right. In 24-hour mode the
+  // marker is absent and COL_GAP collapses so "00:00"+"00" fits in 128 px.
+  const char* ampm = t.tm_hour < 12 ? "A" : "P";
   if (time_12h) {
     int hh = t.tm_hour % 12;
     if (hh == 0) hh = 12;
@@ -805,23 +808,23 @@ static void draw_clock(const struct tm & t) {
     time_w -= lead_blank;
   }
   u8g2.setFont(FONT_SEC);
-  int col_w = adv_width(secStr);
+  int sec_w = adv_width(secStr);
+  int ap_w = 0;
   if (time_12h) {
     u8g2.setFont(FONT_AMPM);
-    int ampm_w = adv_width(ampm);
-    if (ampm_w > col_w) col_w = ampm_w;
+    ap_w = adv_width(ampm) + AP_GAP;
   }
-  x = (SCREEN_W - (time_w + COL_GAP + col_w)) / 2;
+  int col_gap = time_12h ? COL_GAP : 0;
+  x = (SCREEN_W - (ap_w + time_w + col_gap + sec_w)) / 2;
+  if (x < 0) x = 0;
+  if (time_12h) {
+    u8g2.setFont(FONT_AMPM);
+    u8g2.drawStr(x, AMPM_Y, ampm);
+  }
   u8g2.setFont(FONT_TIME);
-  u8g2.drawStr(x - lead_blank, TIME_Y, timeStr);
-  int col_x = x + time_w + COL_GAP;
-  if (time_12h) {
-    u8g2.setFont(FONT_AMPM);
-    u8g2.drawStr(col_x, AMPM_Y, ampm);
-  }
-  u8g2.drawHLine(col_x, SEP_Y, col_w);
+  u8g2.drawStr(x + ap_w - lead_blank, TIME_Y, timeStr);
   u8g2.setFont(FONT_SEC);
-  u8g2.drawStr(col_x, SEC_Y, secStr);
+  u8g2.drawStr(x + ap_w + time_w + col_gap, SEC_Y, secStr);
 
   // ---- Row 3, packed left after the icons: lunar date, the solar term
   // right next to it (TERM_GAP), then the holiday/festival name in whatever
