@@ -121,10 +121,11 @@ const char* password = WIFI_PASSWORD;
 // Piezo buzzer (passive piezo between SPK_PIN and GND; it draws almost no
 // current, so the GPIO drives it directly). Same values as the CYD clock.
 #define SPK_PIN              10                   // buzzer present? tone pin, or -1 = no buzzer at all
-#define SPK_GND_PIN          20                   // where the piezo's OTHER leg goes (independent of SPK_PIN):
-                                                  //   20 = virtual ground, a GPIO held LOW - the SuperMini has a
-                                                  //        single GND pin (used by the OLED) and GPIO20 sits right
-                                                  //        next to GPIO10, so the piezo plugs straight across 10-20
+#define SPK_GND_PIN          21                   // where the piezo's OTHER leg goes (independent of SPK_PIN):
+                                                  //   a GPIO held LOW as a virtual ground - the SuperMini has a
+                                                  //        single GND pin (used by the OLED). 21 = UART0 TX, free
+                                                  //        while Serial runs over USB CDC (the ROM bootloader
+                                                  //        chirps it briefly at reset); 20 also works, next to 10
                                                   //   -1 = the piezo is wired to the real GND (still a buzzer!)
 #define BOOT_BEEP            1                    // double beep at boot to verify the wiring
 #define HOURLY_CHIME         1                    // Casio-style "삐삑" on every full hour
