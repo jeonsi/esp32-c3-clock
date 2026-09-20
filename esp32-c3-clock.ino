@@ -170,6 +170,9 @@ const char* password = WIFI_PASSWORD;
 // disable the gauge AND the low-voltage shutdown, so this is safe to flash
 // before the divider is soldered.
 #define VBAT_ADC_PIN         3                    // ADC-capable pin GPIO0-4 (GPIO2 is a strapping pin - avoid); -1 = no gauge
+#define VBAT_GND_PIN         0                    // divider bottom (like SPK_GND_PIN): a GPIO held LOW as a
+                                                  // virtual ground - only 21 uA flows, <1 mV off true GND - so
+                                                  // the single GND pin stays with the OLED. -1 = wired to real GND
 #define VBAT_DIV             2.00f                // divider ratio (Vbat/Vpin); trim against a multimeter reading
 #define VBAT_POLL_MS         10000                // measure every 10 s (16-sample average + EMA)
 #define VBAT_LOW_PCT         10                   // blink the icon at/below this percentage
@@ -1175,6 +1178,19 @@ void setup() {
   setCpuFrequencyMhz(80);
   Serial.begin(115200);
   Serial.printf("CPU %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
+#if VBAT_ADC_PIN >= 0 && VBAT_GND_PIN >= 0
+  // The divider's virtual ground MUST be driven LOW before the first ADC read
+  // below - a floating divider bottom reads garbage. Also pin the pad LOW in
+  // the light-sleep configuration (same lesson as the GPIO9 button pad):
+  // output level + pull-down, so the node never drifts up during sleep.
+  pinMode(VBAT_GND_PIN, OUTPUT);
+  digitalWrite(VBAT_GND_PIN, LOW);
+#if SLEEP_ENABLE
+  gpio_sleep_sel_en((gpio_num_t)VBAT_GND_PIN);
+  gpio_sleep_set_direction((gpio_num_t)VBAT_GND_PIN, GPIO_MODE_OUTPUT);
+  gpio_sleep_set_pull_mode((gpio_num_t)VBAT_GND_PIN, GPIO_PULLDOWN_ONLY);
+#endif
+#endif
 #if VBAT_ADC_PIN >= 0 && VBAT_SHUTDOWN_MV > 0
   // Woken by the hourly low-battery recheck with the cell still flat? Back to
   // deep sleep before anything lights up. The +100 mV hysteresis lets a cell
