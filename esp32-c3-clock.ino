@@ -953,6 +953,13 @@ static void draw_battery_icon(const struct tm & t) {
   u8g2.drawVLine(11, y + 2, 3);               // terminal nub
   int fill = ((int)vbat_pct * 8 + 50) / 100;  // interior is 8 px wide
   if (fill) u8g2.drawBox(2, y + 1, fill, 5);
+  // percentage next to the icon; even "100" (15 px) ends before the centred
+  // date row's worst-case left edge
+  char pctStr[5];
+  snprintf(pctStr, sizeof(pctStr), "%u", (unsigned)vbat_pct);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr(14, DATE_NUM_Y - 1, pctStr);   // baseline: bottom-aligned with the icon
+  u8g2.setFont(FONT_DATE);
 }
 #endif
 
