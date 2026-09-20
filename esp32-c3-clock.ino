@@ -118,7 +118,7 @@ const char* password = WIFI_PASSWORD;
                                                   // mode never sleeps (it must keep receiving AP beacons).
 #define BTN_IDLE_BEFORE_SLEEP_MS 1500             // no sleep this long after any button activity, so multi-click
                                                   // and long-press timing keep their 10 ms polling
-#define SLEEP_DEBUG          0                    // 1: show the percentage of the last second actually spent
+#define SLEEP_DEBUG          1                    // 1: show the percentage of the last second actually spent
                                                   //    asleep at the digital face's top-right (97 = healthy;
                                                   //    0/blank = sleeping is failing) - no serial needed
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
@@ -754,14 +754,21 @@ static void ble_duty_poll(void) {
 static uint32_t sleep_backoff_until_ms = 0;   // set when sleeping misbehaves: fall back to 10 ms polling for a while
 static uint32_t slept_us_accum = 0;           // time actually slept since the last frame (SLEEP_DEBUG)
 static uint8_t  slept_pct_last = 0;           // last full second's slept percentage (SLEEP_DEBUG)
-static char     sleep_fail_code = 0;          // 0 ok, else a suffix char for the SLEEP_DEBUG readout
+// 0 = the last sleep succeeded; otherwise a prefix char for the SLEEP_DEBUG
+// readout. Sleep-attempt outcomes: '.' rejected, '-' spurious GPIO wake (pin
+// HIGH), 'g' instant GPIO wake with the pin reading LOW, digit = raw wakeup
+// cause. sleep_ready() gates (sleep never attempted): 'w' radio on / Wi-Fi
+// mode, 'b' button held, 'i' button-idle window, 'k' backoff, 's' USB CDC.
+static char     sleep_fail_code = 0;
 
 static bool sleep_ready(void) {
-  if (!time_sync_ble || ble_radio_on) return false;   // Wi-Fi mode / radio window open
-  if (button_down) return false;
-  if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) return false;
-  if ((int32_t)(millis() - sleep_backoff_until_ms) < 0) return false;   // recent reject / spurious wake
-  if (Serial) return false;                           // serial monitor open (DTR asserted)
+  // Each gate records why sleep is blocked, so the SLEEP_DEBUG readout can
+  // tell "sleep failed" apart from "sleep was never attempted".
+  if (!time_sync_ble || ble_radio_on) { sleep_fail_code = 'w'; return false; }   // Wi-Fi mode / radio window open
+  if (button_down)                    { sleep_fail_code = 'b'; return false; }
+  if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) { sleep_fail_code = 'i'; return false; }
+  if ((int32_t)(millis() - sleep_backoff_until_ms) < 0) { sleep_fail_code = 'k'; return false; }   // recent failed sleep
+  if (Serial)                         { sleep_fail_code = 's'; return false; }   // USB CDC session looks open
   return true;
 }
 
@@ -776,7 +783,11 @@ static bool light_sleep_to_next_second(void) {
   if (us < 10000) return false;                            // boundary imminent: let the loop spin
   esp_sleep_enable_timer_wakeup(us);
 #if FACE_BUTTON_PIN >= 0
-  gpio_sleep_sel_dis((gpio_num_t)FACE_BUTTON_PIN);   // re-assert every time: the I2C driver may touch the pad config
+  // Re-assert the pad's sleep configuration (input + pull-up, output
+  // released - see setup()) every time: the I2C driver may touch it.
+  gpio_sleep_sel_en((gpio_num_t)FACE_BUTTON_PIN);
+  gpio_sleep_set_direction((gpio_num_t)FACE_BUTTON_PIN, GPIO_MODE_INPUT);
+  gpio_sleep_set_pull_mode((gpio_num_t)FACE_BUTTON_PIN, GPIO_PULLUP_ONLY);
   gpio_wakeup_enable((gpio_num_t)FACE_BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
 #endif
@@ -880,16 +891,18 @@ static void draw_clock(const struct tm & t) {
 #if SLEEP_ENABLE && SLEEP_DEBUG
   {
     // top-right: how much of the previous second was actually spent asleep
-    // (healthy: ~95-97; 0 = sleeping is failing; blank = sleep never ran)
+    // (healthy: ~95-97). A failure/blocked code from sleep_fail_code goes in
+    // FRONT of the number (see its declaration for the meaning), drawn with a
+    // stock full-ASCII font: the clock's own DSEG fonts only carry the glyphs
+    // the face needs, so letter codes would silently not render.
     char pctStr[6];
-    // suffix: '.' = the OS rejected the sleep, '-' = spurious GPIO wake with
-    // the pin HIGH, 'g' = instant GPIO wake with the pin reading LOW, a
-    // digit = instant wake with that raw wakeup-cause value
     if (sleep_fail_code)
-      snprintf(pctStr, sizeof(pctStr), "%u%c", (unsigned)slept_pct_last, sleep_fail_code);
+      snprintf(pctStr, sizeof(pctStr), "%c%u", sleep_fail_code, (unsigned)slept_pct_last);
     else
       snprintf(pctStr, sizeof(pctStr), "%u", (unsigned)slept_pct_last);
-    u8g2.drawStr(SCREEN_W - 2 - adv_width(pctStr), DATE_NUM_Y, pctStr);
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(SCREEN_W - 1 - u8g2.getStrWidth(pctStr), DATE_NUM_Y, pctStr);
+    u8g2.setFont(FONT_DATE);
   }
 #endif
   draw_source_icon(t);
@@ -1068,12 +1081,16 @@ void setup() {
     pinMode(FACE_BUTTON_PIN, INPUT_PULLUP);
   }
 #if SLEEP_ENABLE
-  // Light sleep switches every pad to a separate "sleep configuration",
-  // where this I2C-owned pad can lose its input enable - a pad with input
-  // disabled reads LOW, which trips the LOW-level wakeup the instant sleep
-  // starts. Keep the ACTIVE configuration (input enabled, external pull-up
-  // on the OLED module) through sleep.
-  gpio_sleep_sel_dis((gpio_num_t)FACE_BUTTON_PIN);
+  // Light sleep switches every pad to a separate "sleep configuration".
+  // Keeping the ACTIVE configuration through sleep (gpio_sleep_sel_dis) does
+  // not work here: the open-drain SCL pad then follows the clock-gated I2C
+  // controller's output (0) and pulls the line LOW, which trips the LOW-level
+  // wakeup instantly. Instead, give the pad a proper sleep configuration:
+  // plain input with a pull-up, output released - SCL floats HIGH and only a
+  // real button press wakes the chip.
+  gpio_sleep_sel_en((gpio_num_t)FACE_BUTTON_PIN);
+  gpio_sleep_set_direction((gpio_num_t)FACE_BUTTON_PIN, GPIO_MODE_INPUT);
+  gpio_sleep_set_pull_mode((gpio_num_t)FACE_BUTTON_PIN, GPIO_PULLUP_ONLY);
 #endif
   Serial.printf("Face button on GPIO%d%s, level %d\n", FACE_BUTTON_PIN,
                 (FACE_BUTTON_PIN == SDA || FACE_BUTTON_PIN == SCL) ? " (shared with I2C)" : "",
