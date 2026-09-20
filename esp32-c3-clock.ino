@@ -930,13 +930,15 @@ static void vbat_poll(void) {
 // fill tracks the percentage; at/below VBAT_LOW_PCT it blinks once a second.
 static void draw_battery_icon(const struct tm & t) {
 #if SLEEP_ENABLE && SLEEP_DEBUG
-  if (!vbat_valid) {
-    // Debug builds show WHY the gauge is hidden: the raw reading in mV.
-    // ~5000 = powered from real 5V USB (expected, gauge hides by design),
-    // ~2x the battery voltage = divider bottom not at ground (GPIO0 leg),
-    // ~0 or tiny = ADC leg (GPIO3) not connected / shorted low.
+  {
+    // Debug builds show the measured millivolts instead of the icon.
+    // Valid reading: the EMA value, for calibrating VBAT_DIV against a
+    // multimeter on the 5V pin. Invalid (gauge hidden): the raw value -
+    // ~5000 = powered from real 5V USB (hidden by design), ~2x the battery
+    // voltage = divider bottom not at ground (GPIO0 leg), ~0 or tiny = ADC
+    // leg (GPIO3) open or shorted low.
     char mvStr[6];
-    snprintf(mvStr, sizeof(mvStr), "%u", (unsigned)vbat_raw_mv);
+    snprintf(mvStr, sizeof(mvStr), "%u", (unsigned)(vbat_valid ? vbat_mv : vbat_raw_mv));
     u8g2.setFont(u8g2_font_5x7_tr);
     u8g2.drawStr(1, DATE_NUM_Y, mvStr);
     u8g2.setFont(FONT_DATE);
