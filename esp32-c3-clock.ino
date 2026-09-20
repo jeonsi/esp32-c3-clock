@@ -89,6 +89,7 @@
 #include "esp_bt.h"     // esp_bt_controller_mem_release() on Wi-Fi boots
 #include "esp_sleep.h"  // light sleep between second updates (SLEEP_ENABLE)
 #include "driver/gpio.h"
+#include "soc/usb_serial_jtag_reg.h"  // SOF detection: is a real USB host attached?
 #include "korean_calendar.h"
 #include "clock_fonts.h"
 // ble_time.h is included after the tunables below - it needs TZ_INFO,
@@ -761,6 +762,18 @@ static uint8_t  slept_pct_last = 0;           // last full second's slept percen
 // mode, 'b' button held, 'i' button-idle window, 'k' backoff, 's' USB CDC.
 static char     sleep_fail_code = 0;
 
+// `if (Serial)` cannot gate sleeping: the HWCDC bool only checks that the TX
+// FIFO is writable, which is true on any power source - a power bank kept it
+// "connected" and blocked sleep forever. A real USB host sends a SOF packet
+// every 1 ms; a charger/power bank never does. Read-and-clear the SOF
+// interrupt's raw status: consecutive calls are >= 10 ms apart, so with a
+// live host the bit is always set again by the next call.
+static bool usb_host_alive(void) {
+  bool alive = REG_READ(USB_SERIAL_JTAG_INT_RAW_REG) & USB_SERIAL_JTAG_SOF_INT_RAW;
+  REG_WRITE(USB_SERIAL_JTAG_INT_CLR_REG, USB_SERIAL_JTAG_SOF_INT_CLR);
+  return alive;
+}
+
 static bool sleep_ready(void) {
   // Each gate records why sleep is blocked, so the SLEEP_DEBUG readout can
   // tell "sleep failed" apart from "sleep was never attempted".
@@ -768,7 +781,7 @@ static bool sleep_ready(void) {
   if (button_down)                    { sleep_fail_code = 'b'; return false; }
   if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) { sleep_fail_code = 'i'; return false; }
   if ((int32_t)(millis() - sleep_backoff_until_ms) < 0) { sleep_fail_code = 'k'; return false; }   // recent failed sleep
-  if (Serial)                         { sleep_fail_code = 's'; return false; }   // USB CDC session looks open
+  if (usb_host_alive())               { sleep_fail_code = 's'; return false; }   // a real USB host is attached
   return true;
 }
 
