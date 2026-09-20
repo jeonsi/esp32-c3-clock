@@ -118,6 +118,9 @@ const char* password = WIFI_PASSWORD;
                                                   // mode never sleeps (it must keep receiving AP beacons).
 #define BTN_IDLE_BEFORE_SLEEP_MS 1500             // no sleep this long after any button activity, so multi-click
                                                   // and long-press timing keep their 10 ms polling
+#define SLEEP_DEBUG          0                    // 1: show the percentage of the last second actually spent
+                                                  //    asleep at the digital face's top-right (97 = healthy;
+                                                  //    0/blank = sleeping is failing) - no serial needed
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define DISPLAY_FLIP         0                    // 1: rotate the screen 180 degrees (clock mounted upside down)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
@@ -748,25 +751,51 @@ static void ble_duty_poll(void) {
 // in progress, while the radio window is open, while the serial monitor is
 // attached (sleep kills the USB CDC session), or in Wi-Fi mode at all.
 #if SLEEP_ENABLE
+static uint32_t sleep_backoff_until_ms = 0;   // set when sleeping misbehaves: fall back to 10 ms polling for a while
+static uint32_t slept_us_accum = 0;           // time actually slept since the last frame (SLEEP_DEBUG)
+static uint8_t  slept_pct_last = 0;           // last full second's slept percentage (SLEEP_DEBUG)
+
 static bool sleep_ready(void) {
   if (!time_sync_ble || ble_radio_on) return false;   // Wi-Fi mode / radio window open
   if (button_down) return false;
   if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) return false;
+  if ((int32_t)(millis() - sleep_backoff_until_ms) < 0) return false;   // recent reject / spurious wake
   if (Serial) return false;                           // serial monitor open (DTR asserted)
   return true;
 }
 
-static void light_sleep_to_next_second(void) {
+// Returns true when a real sleep happened; false means "do a normal 10 ms
+// poll instead" - a rejected sleep or an instant spurious wake must never
+// loop straight back into another attempt (that busy loop costs MORE than
+// never sleeping), so those set a one-second backoff.
+static bool light_sleep_to_next_second(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   uint32_t us = 1000000UL - (uint32_t)tv.tv_usec + 2000;   // wake just past the boundary
-  if (us < 10000) return;                                  // boundary imminent: let the loop spin
+  if (us < 10000) return false;                            // boundary imminent: let the loop spin
   esp_sleep_enable_timer_wakeup(us);
 #if FACE_BUTTON_PIN >= 0
   gpio_wakeup_enable((gpio_num_t)FACE_BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
 #endif
-  esp_light_sleep_start();
+  int64_t t0 = esp_timer_get_time();
+  esp_err_t err = esp_light_sleep_start();
+  uint32_t slept = (uint32_t)(esp_timer_get_time() - t0);
+  slept_us_accum += slept;
+  if (err != ESP_OK) {                                     // e.g. ESP_ERR_SLEEP_REJECT
+    sleep_backoff_until_ms = millis() + 1000;
+    Serial.printf("light sleep rejected (err %d)\n", (int)err);
+    return false;
+  }
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO &&
+      digitalRead(FACE_BUTTON_PIN) == HIGH && slept < 100000) {
+    // GPIO wake but the button is not pressed and we barely slept: noise on
+    // the shared SCL line. Poll for the rest of this second instead of
+    // thrashing sleep entry/exit hundreds of times.
+    sleep_backoff_until_ms = millis() + 1000;
+    return false;
+  }
+  return slept > 5000;
 }
 #endif
 
@@ -827,6 +856,15 @@ static void draw_clock(const struct tm & t) {
   draw_str_hl(x, DATE_NUM_Y, wd, day_info.red_day);
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x + wd_w + DATE_GAP, DATE_NUM_Y, dateStr);
+#if SLEEP_ENABLE && SLEEP_DEBUG
+  {
+    // top-right: how much of the previous second was actually spent asleep
+    // (healthy: ~95-97; 0 = sleeping is failing; blank = sleep never ran)
+    char pctStr[4];
+    snprintf(pctStr, sizeof(pctStr), "%u", (unsigned)slept_pct_last);
+    u8g2.drawStr(SCREEN_W - 2 - adv_width(pctStr), DATE_NUM_Y, pctStr);
+  }
+#endif
   draw_source_icon(t);
   draw_sound_icon();
 
@@ -1111,6 +1149,10 @@ void loop() {
   localtime_r(&now, &t);
   if (t.tm_sec != last_drawn_sec) {
     last_drawn_sec = t.tm_sec;
+#if SLEEP_ENABLE && SLEEP_DEBUG
+    slept_pct_last = (uint8_t)(slept_us_accum / 10000 > 99 ? 99 : slept_us_accum / 10000);
+    slept_us_accum = 0;
+#endif
     apply_brightness(t);
     if (face_mode == FACE_ANALOG) draw_analog(t);
     else                          draw_clock(t);
