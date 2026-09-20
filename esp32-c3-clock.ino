@@ -119,7 +119,7 @@ const char* password = WIFI_PASSWORD;
                                                   // mode never sleeps (it must keep receiving AP beacons).
 #define BTN_IDLE_BEFORE_SLEEP_MS 1500             // no sleep this long after any button activity, so multi-click
                                                   // and long-press timing keep their 10 ms polling
-#define SLEEP_DEBUG          0                    // 1: show the percentage of the last second actually spent
+#define SLEEP_DEBUG          1                    // 1: show the percentage of the last second actually spent
                                                   //    asleep at the digital face's top-right (97 = healthy;
                                                   //    0/blank = sleeping is failing) - no serial needed
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
@@ -163,6 +163,20 @@ const char* password = WIFI_PASSWORD;
 #define OVERRIDE_12H         -1                   // 0 = 24-hour, 1 = 12-hour
 #define OVERRIDE_TIME_SRC    -1                   // 0 = Wi-Fi SNTP, 1 = BLE CTS
 #define OVERRIDE_SOUND       -1                   // 0 = muted, 1 = sounds on
+
+// Battery gauge: battery+ (the 5V pin when the pack feeds USB) -> 100k ->
+// [ADC pin] -> 100k -> GND halves the voltage into the ADC's ~2.5V range.
+// Readings that make no sense for a Li-ion cell (pin left unwired/floating)
+// disable the gauge AND the low-voltage shutdown, so this is safe to flash
+// before the divider is soldered.
+#define VBAT_ADC_PIN         3                    // ADC-capable pin GPIO0-4 (GPIO2 is a strapping pin - avoid); -1 = no gauge
+#define VBAT_DIV             2.00f                // divider ratio (Vbat/Vpin); trim against a multimeter reading
+#define VBAT_POLL_MS         10000                // measure every 10 s (16-sample average + EMA)
+#define VBAT_LOW_PCT         10                   // blink the icon at/below this percentage
+#define VBAT_SHUTDOWN_MV     3000                 // 3 low polls in a row below this: OLED off + deep sleep to
+                                                  // protect the cell (~50 uA); rechecks hourly, so charging it
+                                                  // revives the clock within the hour (or press reset). 0 = never
+#define VBAT_RECHECK_S       3600                 // deep-sleep recheck interval
 
 // Night dimming (by the clock; the C3 board has no light sensor)
 #define NIGHT_FROM_HOUR      20                   // dim from 20:00 ...
@@ -844,6 +858,81 @@ static bool light_sleep_to_next_second(void) {
 }
 #endif
 
+// ---- Battery gauge ----------------------------------------------------------
+// Battery voltage through the external 100k/100k divider (see the tunables).
+// 16-sample average + EMA; the OCV curve of a typical LCO/NMC pouch cell maps
+// voltage to a percentage. Below VBAT_SHUTDOWN_MV the clock turns the OLED
+// off and deep-sleeps to keep the cell out of the deep-discharge zone,
+// rechecking hourly so putting it on the charger revives it by itself.
+#if VBAT_ADC_PIN >= 0
+static bool     vbat_valid = false;   // sane readings seen (divider actually wired)
+static uint16_t vbat_mv  = 0;         // EMA-smoothed battery voltage
+static uint8_t  vbat_pct = 0;
+static uint8_t  vbat_low_polls = 0;   // consecutive polls under VBAT_SHUTDOWN_MV
+
+static const struct { uint16_t mv; uint8_t pct; } VBAT_CURVE[] = {
+  {4200,100},{4100,90},{4000,78},{3870,60},{3800,50},{3730,35},
+  {3680,25},{3620,15},{3520,8},{3400,4},{3200,1},{3000,0},
+};
+
+static uint8_t vbat_to_pct(uint16_t mv) {
+  if (mv >= VBAT_CURVE[0].mv) return 100;
+  const int n = sizeof(VBAT_CURVE) / sizeof(VBAT_CURVE[0]);
+  for (int i = 1; i < n; i++) {
+    if (mv >= VBAT_CURVE[i].mv) {
+      const auto & lo = VBAT_CURVE[i], & hi = VBAT_CURVE[i - 1];
+      return lo.pct + (uint32_t)(mv - lo.mv) * (hi.pct - lo.pct) / (hi.mv - lo.mv);
+    }
+  }
+  return 0;
+}
+
+static uint16_t vbat_read_mv(void) {
+  uint32_t sum = 0;
+  for (int i = 0; i < 16; i++) sum += analogReadMilliVolts(VBAT_ADC_PIN);
+  return (uint16_t)((sum / 16) * VBAT_DIV);
+}
+
+// OLED off + deep sleep (~50 uA incl. the LDO); the hourly timer recheck in
+// setup() lets a recharged cell bring the clock back without the reset button.
+static void vbat_shutdown(bool oled_on) {
+  if (oled_on) u8g2.setPowerSave(1);
+  esp_sleep_enable_timer_wakeup((uint64_t)VBAT_RECHECK_S * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+static void vbat_poll(void) {
+  static uint32_t last_ms = 0;
+  if (last_ms && millis() - last_ms < VBAT_POLL_MS) return;
+  last_ms = millis();
+  uint16_t mv = vbat_read_mv();
+  if (mv < 2500 || mv > 4500) { vbat_valid = false; return; }   // divider not wired: pin floats
+  vbat_mv = vbat_valid ? (uint16_t)((3 * (uint32_t)vbat_mv + mv) / 4) : mv;
+  vbat_valid = true;
+  vbat_pct = vbat_to_pct(vbat_mv);
+#if VBAT_SHUTDOWN_MV > 0
+  if (vbat_mv < VBAT_SHUTDOWN_MV) {
+    if (++vbat_low_polls >= 3) vbat_shutdown(true);   // 3 in a row: not a BLE-burst sag
+  } else {
+    vbat_low_polls = 0;
+  }
+#endif
+}
+
+// Battery icon in the top-left corner - the date row is centred, so both top
+// corners are free, and SLEEP_DEBUG's readout keeps the top-RIGHT one. The
+// fill tracks the percentage; at/below VBAT_LOW_PCT it blinks once a second.
+static void draw_battery_icon(const struct tm & t) {
+  if (!vbat_valid) return;
+  if (vbat_pct <= VBAT_LOW_PCT && (t.tm_sec & 1)) return;
+  const int y = DATE_NUM_Y - 7;               // 10x7 body top-aligned with the date row
+  u8g2.drawFrame(1, y, 10, 7);
+  u8g2.drawVLine(11, y + 2, 3);               // terminal nub
+  int fill = ((int)vbat_pct * 8 + 50) / 100;  // interior is 8 px wide
+  if (fill) u8g2.drawBox(2, y + 1, fill, 5);
+}
+#endif
+
 // Time-source icon in the bottom-left corner (like the CYD's link icon):
 // BT rune or Wi-Fi arcs for the
 // selected source, blinking once per second while its link is down. In BLE
@@ -920,6 +1009,9 @@ static void draw_clock(const struct tm & t) {
 #endif
   draw_source_icon(t);
   draw_sound_icon();
+#if VBAT_ADC_PIN >= 0
+  draw_battery_icon(t);
+#endif
 
   // ---- Row 2: [P] HH:MM SS, centred as one block. PM shows a single "P"
   // top-aligned at the time's top-left; AM shows nothing, but the marker's
@@ -1055,6 +1147,9 @@ static void draw_analog(const struct tm & t) {
   u8g2.drawDisc(DIAL_CX, DIAL_CY, HUB_R);
   draw_source_icon(t);
   draw_sound_icon();
+#if VBAT_ADC_PIN >= 0
+  draw_battery_icon(t);
+#endif
 
   draw_banner();
   dither_buffer();
@@ -1080,6 +1175,15 @@ void setup() {
   setCpuFrequencyMhz(80);
   Serial.begin(115200);
   Serial.printf("CPU %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
+#if VBAT_ADC_PIN >= 0 && VBAT_SHUTDOWN_MV > 0
+  // Woken by the hourly low-battery recheck with the cell still flat? Back to
+  // deep sleep before anything lights up. The +100 mV hysteresis lets a cell
+  // that is charging come back promptly without bouncing at the threshold.
+  {
+    uint16_t mv = vbat_read_mv();
+    if (mv >= 2500 && mv <= 4500 && mv < VBAT_SHUTDOWN_MV + 100) vbat_shutdown(false);
+  }
+#endif
   u8g2.setBusClock(400000);   // 400 kHz: the 1 KB frame goes out in ~23 ms instead of ~90 ms,
                               // shrinking the once-a-second window in which the shared-SCL
                               // button cannot be sampled (fast clicks were getting swallowed)
@@ -1195,6 +1299,9 @@ void setup() {
 
 void loop() {
   button_poll();
+#if VBAT_ADC_PIN >= 0
+  vbat_poll();                          // self-throttled to every VBAT_POLL_MS
+#endif
   if (time_sync_ble) ble_duty_poll();   // CTS resync + radio duty cycle
   if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
     delay(10);
