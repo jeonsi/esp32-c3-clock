@@ -119,7 +119,7 @@ const char* password = WIFI_PASSWORD;
                                                   // mode never sleeps (it must keep receiving AP beacons).
 #define BTN_IDLE_BEFORE_SLEEP_MS 1500             // no sleep this long after any button activity, so multi-click
                                                   // and long-press timing keep their 10 ms polling
-#define SLEEP_DEBUG          1                    // 1: show the percentage of the last second actually spent
+#define SLEEP_DEBUG          0                    // 1: show the percentage of the last second actually spent
                                                   //    asleep at the digital face's top-right (97 = healthy;
                                                   //    0/blank = sleeping is failing) - no serial needed
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
