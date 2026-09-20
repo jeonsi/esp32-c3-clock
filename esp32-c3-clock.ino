@@ -173,7 +173,8 @@ const char* password = WIFI_PASSWORD;
 #define VBAT_GND_PIN         0                    // divider bottom (like SPK_GND_PIN): a GPIO held LOW as a
                                                   // virtual ground - only 21 uA flows, <1 mV off true GND - so
                                                   // the single GND pin stays with the OLED. -1 = wired to real GND
-#define VBAT_DIV             2.00f                // divider ratio (Vbat/Vpin); trim against a multimeter reading
+#define VBAT_DIV             2.028f               // divider ratio (Vbat/Vpin), trimmed against a multimeter:
+                                                  // 2.00 x 3938 (measured) / 3883 (displayed at 2.00)
 #define VBAT_POLL_MS         10000                // measure every 10 s (16-sample average + EMA)
 #define VBAT_LOW_PCT         10                   // blink the icon at/below this percentage
 #define VBAT_SHUTDOWN_MV     3000                 // 3 low polls in a row below this: OLED off + deep sleep to
