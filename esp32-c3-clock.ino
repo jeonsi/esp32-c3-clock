@@ -870,6 +870,7 @@ static bool light_sleep_to_next_second(void) {
 #if VBAT_ADC_PIN >= 0
 static bool     vbat_valid = false;   // sane readings seen (divider actually wired)
 static uint16_t vbat_mv  = 0;         // EMA-smoothed battery voltage
+static uint16_t vbat_raw_mv = 0;      // last raw reading, valid or not (debug readout)
 static uint8_t  vbat_pct = 0;
 static uint8_t  vbat_low_polls = 0;   // consecutive polls under VBAT_SHUTDOWN_MV
 
@@ -909,6 +910,8 @@ static void vbat_poll(void) {
   if (last_ms && millis() - last_ms < VBAT_POLL_MS) return;
   last_ms = millis();
   uint16_t mv = vbat_read_mv();
+  vbat_raw_mv = mv;
+  Serial.printf("VBAT %u mV%s\n", mv, (mv < 2500 || mv > 4500) ? " (invalid - gauge hidden)" : "");
   if (mv < 2500 || mv > 4500) { vbat_valid = false; return; }   // divider not wired: pin floats
   vbat_mv = vbat_valid ? (uint16_t)((3 * (uint32_t)vbat_mv + mv) / 4) : mv;
   vbat_valid = true;
@@ -926,6 +929,20 @@ static void vbat_poll(void) {
 // corners are free, and SLEEP_DEBUG's readout keeps the top-RIGHT one. The
 // fill tracks the percentage; at/below VBAT_LOW_PCT it blinks once a second.
 static void draw_battery_icon(const struct tm & t) {
+#if SLEEP_ENABLE && SLEEP_DEBUG
+  if (!vbat_valid) {
+    // Debug builds show WHY the gauge is hidden: the raw reading in mV.
+    // ~5000 = powered from real 5V USB (expected, gauge hides by design),
+    // ~2x the battery voltage = divider bottom not at ground (GPIO0 leg),
+    // ~0 or tiny = ADC leg (GPIO3) not connected / shorted low.
+    char mvStr[6];
+    snprintf(mvStr, sizeof(mvStr), "%u", (unsigned)vbat_raw_mv);
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(1, DATE_NUM_Y, mvStr);
+    u8g2.setFont(FONT_DATE);
+    return;
+  }
+#endif
   if (!vbat_valid) return;
   if (vbat_pct <= VBAT_LOW_PCT && (t.tm_sec & 1)) return;
   const int y = DATE_NUM_Y - 7;               // 10x7 body top-aligned with the date row
