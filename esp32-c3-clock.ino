@@ -754,7 +754,7 @@ static void ble_duty_poll(void) {
 static uint32_t sleep_backoff_until_ms = 0;   // set when sleeping misbehaves: fall back to 10 ms polling for a while
 static uint32_t slept_us_accum = 0;           // time actually slept since the last frame (SLEEP_DEBUG)
 static uint8_t  slept_pct_last = 0;           // last full second's slept percentage (SLEEP_DEBUG)
-static uint8_t  sleep_fail_code = 0;          // 0 ok, 1 rejected, 2 spurious GPIO wake (SLEEP_DEBUG)
+static char     sleep_fail_code = 0;          // 0 ok, else a suffix char for the SLEEP_DEBUG readout
 
 static bool sleep_ready(void) {
   if (!time_sync_ble || ble_radio_on) return false;   // Wi-Fi mode / radio window open
@@ -776,6 +776,7 @@ static bool light_sleep_to_next_second(void) {
   if (us < 10000) return false;                            // boundary imminent: let the loop spin
   esp_sleep_enable_timer_wakeup(us);
 #if FACE_BUTTON_PIN >= 0
+  gpio_sleep_sel_dis((gpio_num_t)FACE_BUTTON_PIN);   // re-assert every time: the I2C driver may touch the pad config
   gpio_wakeup_enable((gpio_num_t)FACE_BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
 #endif
@@ -791,21 +792,31 @@ static bool light_sleep_to_next_second(void) {
   slept_us_accum += slept;
   if (err != ESP_OK) {                                     // e.g. ESP_ERR_SLEEP_REJECT
     sleep_backoff_until_ms = millis() + 1000;
-    sleep_fail_code = 1;
+    sleep_fail_code = '.';
     Serial.printf("light sleep rejected (err %d)\n", (int)err);
     return false;
   }
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO &&
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_GPIO &&
       digitalRead(FACE_BUTTON_PIN) == HIGH && slept < 100000) {
     // GPIO wake but the button is not pressed and we barely slept: noise or
     // a mis-set sleep pad configuration on the shared SCL line. Poll for
     // the rest of this second instead of thrashing sleep entry/exit.
     sleep_backoff_until_ms = millis() + 1000;
-    sleep_fail_code = 2;
+    sleep_fail_code = '-';
+    return false;
+  }
+  if (slept <= 5000) {
+    // Woke up essentially immediately for some OTHER reason - identify it on
+    // the debug readout ('g' = GPIO wake with the pin reading LOW, i.e. the
+    // sleep pad configuration disabled the input; a digit = the raw
+    // esp_sleep_wakeup_cause_t value) and back off like the cases above.
+    sleep_backoff_until_ms = millis() + 1000;
+    sleep_fail_code = (cause == ESP_SLEEP_WAKEUP_GPIO) ? 'g' : (char)('0' + (int)cause);
     return false;
   }
   sleep_fail_code = 0;
-  return slept > 5000;
+  return true;
 }
 #endif
 
@@ -871,9 +882,13 @@ static void draw_clock(const struct tm & t) {
     // top-right: how much of the previous second was actually spent asleep
     // (healthy: ~95-97; 0 = sleeping is failing; blank = sleep never ran)
     char pctStr[6];
-    // suffix: '.' = the OS rejected the sleep, '-' = spurious GPIO wake
-    snprintf(pctStr, sizeof(pctStr), "%u%s", (unsigned)slept_pct_last,
-             sleep_fail_code == 1 ? "." : sleep_fail_code == 2 ? "-" : "");
+    // suffix: '.' = the OS rejected the sleep, '-' = spurious GPIO wake with
+    // the pin HIGH, 'g' = instant GPIO wake with the pin reading LOW, a
+    // digit = instant wake with that raw wakeup-cause value
+    if (sleep_fail_code)
+      snprintf(pctStr, sizeof(pctStr), "%u%c", (unsigned)slept_pct_last, sleep_fail_code);
+    else
+      snprintf(pctStr, sizeof(pctStr), "%u", (unsigned)slept_pct_last);
     u8g2.drawStr(SCREEN_W - 2 - adv_width(pctStr), DATE_NUM_Y, pctStr);
   }
 #endif
@@ -1190,9 +1205,11 @@ void loop() {
   }
 
 #if SLEEP_ENABLE
-  if (sleep_ready()) {
-    light_sleep_to_next_second();   // millis()/time keep advancing across light sleep
-    return;
+  // A failed sleep MUST fall through to the 10 ms poll: looping straight back
+  // into another attempt busy-loops at full power when sleeps keep ending
+  // instantly for a reason the backoff cases don't catch.
+  if (sleep_ready() && light_sleep_to_next_second()) {
+    return;                         // millis()/time keep advancing across light sleep
   }
 #endif
   delay(10);
