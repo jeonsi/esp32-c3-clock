@@ -62,6 +62,10 @@
         pre-charge, VCOMH and contrast together and restores the init values
         by day. NIGHT_DITHER additionally lights only every other pixel;
         NIGHT_OFF switches the panel off instead.
+      - SLEEP_ENABLE: in BLE mode the chip light-sleeps between second
+        updates while the radio is off (~6 mA average; the button wakes it
+        instantly, an open serial monitor keeps it awake, Wi-Fi mode never
+        sleeps)
       - hourly chime: two short beeps on the hour (CHIME_FROM_HOUR..
         CHIME_TO_HOUR, default 7-22) on a passive piezo between SPK_PIN
         (GPIO10) and GND, like the CYD; BOOT_BEEP sounds it once at boot
@@ -83,6 +87,8 @@
 #include "time.h"
 #include "esp_sntp.h"
 #include "esp_bt.h"     // esp_bt_controller_mem_release() on Wi-Fi boots
+#include "esp_sleep.h"  // light sleep between second updates (SLEEP_ENABLE)
+#include "driver/gpio.h"
 #include "korean_calendar.h"
 #include "clock_fonts.h"
 // ble_time.h is included after the tunables below - it needs TZ_INFO,
@@ -105,6 +111,13 @@ const char* password = WIFI_PASSWORD;
 #define BLE_LINGER_MS        (60 * 1000)          // UPPER BOUND on-time after a sync (first pairing needs the ANCS prompt)
 #define BLE_SETTLE_MS        (2 * 1000)           // once synced AND ANCS-subscribed, close the window after this instead
 #define BLE_SYNC_TIMEOUT_MS  (3 * 60 * 1000)      // close a fruitless resync window after this, retry next interval
+#define SLEEP_ENABLE         1                    // BLE mode: light-sleep between second updates while the radio is
+                                                  // off (~20 mA -> ~6 mA; the OLED is the floor). The button wakes
+                                                  // the chip instantly (GPIO wakeup), and an OPEN serial monitor
+                                                  // (DTR) keeps the clock awake so debugging still works. Wi-Fi
+                                                  // mode never sleeps (it must keep receiving AP beacons).
+#define BTN_IDLE_BEFORE_SLEEP_MS 1500             // no sleep this long after any button activity, so multi-click
+                                                  // and long-press timing keep their 10 ms polling
 #define TIME_12H_DEFAULT     1                    // 1: "11:58" + AM/PM, 0: "23:58" - until toggled (stored in NVS)
 #define DISPLAY_FLIP         0                    // 1: rotate the screen 180 degrees (clock mounted upside down)
 #define FACE_BUTTON_PIN      9                    // BOOT button (= OLED SCL, see above); any free pin -> GND also works; -1 = none
@@ -262,6 +275,7 @@ static void next_face(bool save) {
 // button_down is true while a confirmed press is held; loop() sends nothing
 // to the OLED during that time.
 static bool button_down = false;
+static uint32_t last_btn_activity_ms = 0;   // last edge/press seen on the button (gates light sleep)
 
 // Optional auto cycle every FACE_CYCLE_S seconds for boards without a button.
 static void button_poll(void) {
@@ -280,6 +294,9 @@ static void button_poll(void) {
   static uint8_t  click_count = 0;            // short clicks so far, waiting for the window to close
   static uint32_t click_ms    = 0;
   int level = digitalRead(FACE_BUTTON_PIN);
+  if (level == LOW || level != last_level || button_down || click_count) {
+    last_btn_activity_ms = millis();          // holds off light sleep while a gesture may be in progress
+  }
   // Clicks act once the window has closed after the last click:
   // 1x = next face, 2x = 12/24 h, 3x (or more) = mute toggle.
   if (click_count && !button_down && millis() - click_ms > DOUBLE_CLICK_MS) {
@@ -723,6 +740,36 @@ static void ble_duty_poll(void) {
 #endif
 }
 
+// ---- Light sleep ------------------------------------------------------------
+// In BLE mode the radio is off almost all the time, so between one second's
+// frame and the next there is nothing to do: light-sleep until just past the
+// next second boundary. The button pin wakes the chip immediately (its level
+// goes LOW while pressed), and no sleep happens while a gesture may still be
+// in progress, while the radio window is open, while the serial monitor is
+// attached (sleep kills the USB CDC session), or in Wi-Fi mode at all.
+#if SLEEP_ENABLE
+static bool sleep_ready(void) {
+  if (!time_sync_ble || ble_radio_on) return false;   // Wi-Fi mode / radio window open
+  if (button_down) return false;
+  if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) return false;
+  if (Serial) return false;                           // serial monitor open (DTR asserted)
+  return true;
+}
+
+static void light_sleep_to_next_second(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint32_t us = 1000000UL - (uint32_t)tv.tv_usec + 2000;   // wake just past the boundary
+  if (us < 10000) return;                                  // boundary imminent: let the loop spin
+  esp_sleep_enable_timer_wakeup(us);
+#if FACE_BUTTON_PIN >= 0
+  gpio_wakeup_enable((gpio_num_t)FACE_BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+#endif
+  esp_light_sleep_start();
+}
+#endif
+
 // Time-source icon in the bottom-left corner (like the CYD's link icon):
 // BT rune or Wi-Fi arcs for the
 // selected source, blinking once per second while its link is down. In BLE
@@ -1079,5 +1126,12 @@ void loop() {
     }
 #endif
   }
+
+#if SLEEP_ENABLE
+  if (sleep_ready()) {
+    light_sleep_to_next_second();   // millis()/time keep advancing across light sleep
+    return;
+  }
+#endif
   delay(10);
 }
