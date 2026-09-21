@@ -1018,11 +1018,21 @@ static void draw_clock(const struct tm & t) {
   int wd_w = adv_width(wd);
   u8g2.setFont(FONT_DATE);
   int date_w = adv_width(dateStr);
+  // A leading '1' (January and Oct-Dec: a two-digit month always starts
+  // with 1) is just the B/C segments at the far right of its cell - 7 px of
+  // empty left bearing vs 1 px on the other digits. Tuck that blank under
+  // the weekday gap (same trick as the time row's lead_blank) so the visual
+  // gap stays DATE_GAP in every month.
+  int date_lead = 0;
+  if (dateStr[0] == '1') {
+    date_lead = u8g2_GetXOffsetGlyph(u8g2.getU8g2(), '1');
+    date_w -= date_lead;
+  }
   int x = (SCREEN_W - (wd_w + DATE_GAP + date_w)) / 2;
   u8g2.setFont(FONT_AMPM);
   draw_str_hl(x, DATE_NUM_Y, wd, day_info.red_day);
   u8g2.setFont(FONT_DATE);
-  u8g2.drawStr(x + wd_w + DATE_GAP, DATE_NUM_Y, dateStr);
+  u8g2.drawStr(x + wd_w + DATE_GAP - date_lead, DATE_NUM_Y, dateStr);
 #if SLEEP_ENABLE && SLEEP_DEBUG
   {
     // top-right: how much of the previous second was actually spent asleep
