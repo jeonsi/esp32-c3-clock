@@ -177,7 +177,7 @@ const char* password = WIFI_PASSWORD;
                                                   // 2.00 x 3938 (measured) / 3883 (displayed at 2.00)
 #define VBAT_POLL_MS         10000                // measure every 10 s (16-sample average + EMA)
 #define VBAT_LOW_PCT         10                   // blink the icon at/below this percentage
-#define VBAT_SHUTDOWN_MV     3000                 // 3 low polls in a row below this: OLED off + deep sleep to
+#define VBAT_SHUTDOWN_MV     3300                 // 3 low polls in a row below this: OLED off + deep sleep to
                                                   // protect the cell (~50 uA); rechecks hourly, so charging it
                                                   // revives the clock within the hour (or press reset). 0 = never
 #define VBAT_RECHECK_S       3600                 // deep-sleep recheck interval
@@ -875,9 +875,12 @@ static uint16_t vbat_raw_mv = 0;      // last raw reading, valid or not (debug r
 static uint8_t  vbat_pct = 0;
 static uint8_t  vbat_low_polls = 0;   // consecutive polls under VBAT_SHUTDOWN_MV
 
+// 0% sits at the 3.3V shutdown point, not the cell's absolute floor - the
+// 3.3->3.0V stretch held only ~2% of the capacity, so the upper anchors are
+// unchanged and just the tail is renormalized.
 static const struct { uint16_t mv; uint8_t pct; } VBAT_CURVE[] = {
   {4200,100},{4100,90},{4000,78},{3870,60},{3800,50},{3730,35},
-  {3680,25},{3620,15},{3520,8},{3400,4},{3200,1},{3000,0},
+  {3680,25},{3620,15},{3520,6},{3400,2},{3300,0},
 };
 
 static uint8_t vbat_to_pct(uint16_t mv) {
