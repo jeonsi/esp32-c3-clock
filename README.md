@@ -169,7 +169,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `BLE_LINGER_MS` | 60초 | 구독 확인이 안 됐을 때 동기화 후 라디오를 켜두는 상한(첫 페어링의 ANCS 허용 단계용) |
 | `BLE_SYNC_TIMEOUT_MS` | 3분 | 동기화 없이 열려 있는 재동기화 창을 닫기까지의 시간 |
 | `SLEEP_ENABLE` | 1 | BLE 모드에서 초 갱신 사이 light sleep(실측 ~10mA). 0이면 항상 깨어 있음 |
-| `SLEEP_DEBUG` | 0 | 1이면 우상단에 직전 1초의 수면 비율 표시(문제 시 원인 문자가 앞에 붙음) |
+| `SLEEP_DEBUG` | 1 | 1이면 우상단에 직전 1초의 수면 비율 표시(문제 시 원인 문자가 앞에 붙음) |
 | `VBAT_ADC_PIN` | 3 | 배터리 분압(100k/100k)이 연결된 ADC 핀(GPIO0~4). -1 = 잔량 표시 없음 |
 | `VBAT_GND_PIN` | 0 | 분압기 바닥을 받는 가상 GND용 GPIO(LOW 유지). -1 = 진짜 GND에 배선 |
 | `VBAT_DIV` | 2.028 | 분압비(Vbat/Vpin) — 멀티미터 실측으로 보정(보드별 값) |
