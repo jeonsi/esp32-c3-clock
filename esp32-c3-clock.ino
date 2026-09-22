@@ -43,7 +43,7 @@
                                  shows nothing, the space stays reserved)
         11:58         42        DSEG7 Bold 28px HH:MM + 18px seconds
                                  (~2/3 height, bottom-aligned)
-        음 8.15 추분  추석        굴림 12px: lunar date ("음"/"음 윤" in 굴림,
+        - 8.15 추분  추석         굴림 12px: lunar date ("-"/"- 윤" marker,
                                  numbers in DSEG7 11px) and the solar term
                                  (inverted on the day it begins) packed left
                                  after the icons; the holiday (inverted) or
@@ -175,6 +175,9 @@ const char* password = WIFI_PASSWORD;
                                                   // the single GND pin stays with the OLED. -1 = wired to real GND
 #define VBAT_DIV             2.028f               // divider ratio (Vbat/Vpin), trimmed against a multimeter:
                                                   // 2.00 x 3938 (measured) / 3883 (displayed at 2.00)
+#define BATTERY_DEBUG        0                    // 1: show the measured battery millivolts top-left in place of
+                                                  //    the icon (VBAT_DIV calibration / wiring diagnosis),
+                                                  //    independent of SLEEP_DEBUG
 #define VBAT_POLL_MS         10000                // measure every 10 s (16-sample average + EMA)
 #define VBAT_LOW_PCT         10                   // blink the icon at/below this percentage
 #define VBAT_SHUTDOWN_MV     3300                 // 3 low polls in a row below this: OLED off + deep sleep to
@@ -212,8 +215,8 @@ const char* password = WIFI_PASSWORD;
 #define SEC_Y        47                           // seconds (y 29..46) bottom-aligned with the digits
 #define BOTTOM_Y     61                           // Hangul
 #define BOTTOM_NUM_Y 62                           // lunar digits
-#define DATE_GAP     12                           // weekday .. month-day
-#define LUNAR_GAP    3                            // "음" .. "8.15"
+#define DATE_GAP     8                           // weekday .. month-day
+#define LUNAR_GAP    3                            // "-" .. "8.15"
 #define AP_GAP       2                            // A/P marker .. HH:MM
 #define COL_GAP      3                            // HH:MM .. seconds (collapses to 0 in 24-hour mode to fit)
 #define TERM_GAP     4                            // lunar date .. solar term (packed tight)
@@ -365,7 +368,7 @@ static void button_poll(void) {
 static struct {
   int         yday  = -1;      // tm_yday of the cached day (-1 = none)
   int         year  = -1;
-  char        lunar_kr[8];     // "음" / "음 윤" (leap month), "" outside the table
+  char        lunar_kr[8];     // "-" / "- 윤" (leap month), "" outside the table
   char        lunar_num[8];    // "7.11"
   const char* term  = nullptr; // solar term name or nullptr
   bool        term_today = false;
@@ -382,7 +385,7 @@ static void update_day_info(const struct tm & t) {
   klc_date_t ld;
   bool have_lunar = klc_solar_to_lunar(&t, &ld);
   if (have_lunar) {
-    snprintf(day_info.lunar_kr,  sizeof(day_info.lunar_kr),  "음%s", ld.leap ? " 윤" : "");
+    snprintf(day_info.lunar_kr,  sizeof(day_info.lunar_kr),  "-%s", ld.leap ? " 윤" : "");
     snprintf(day_info.lunar_num, sizeof(day_info.lunar_num), "%d.%d", ld.month, ld.day);
   } else {
     day_info.lunar_kr[0] = day_info.lunar_num[0] = '\0';
@@ -933,7 +936,7 @@ static void vbat_poll(void) {
 // corners are free, and SLEEP_DEBUG's readout keeps the top-RIGHT one. The
 // fill tracks the percentage; at/below VBAT_LOW_PCT it blinks once a second.
 static void draw_battery_icon(const struct tm & t) {
-#if SLEEP_ENABLE && SLEEP_DEBUG
+#if BATTERY_DEBUG
   {
     // Debug builds show the measured millivolts instead of the icon.
     // Valid reading: the EMA value, for calibrating VBAT_DIV against a
@@ -1107,7 +1110,7 @@ static void draw_clock(const struct tm & t) {
   // right next to it (TERM_GAP), then the holiday/festival name in whatever
   // space remains - the tight packing is what buys the name its room.
   // Overflow still drops the term first, then the lunar date; the name
-  // always fits. "음"/"음 윤" in Hangul, digits in DSEG.
+  // always fits. "-"/"- 윤" as the lunar marker, digits in DSEG.
   {
     const int W = SCREEN_W - ICON_AREA - 3;   // right of the icons, 1 px spare for the inverted box
     int kr_w = 0, num_w = 0;
