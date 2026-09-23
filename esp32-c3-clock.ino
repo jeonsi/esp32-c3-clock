@@ -958,17 +958,18 @@ static void draw_battery_icon(const struct tm & t) {
 #endif
   if (!vbat_valid) return;
   if (vbat_pct <= VBAT_LOW_PCT && (t.tm_sec & 1)) return;
-  const int y = DATE_NUM_Y - 7;               // 10x7 body top-aligned with the date row
-  u8g2.drawFrame(1, y, 10, 7);
-  u8g2.drawVLine(11, y + 2, 3);               // terminal nub
-  int fill = ((int)vbat_pct * 8 + 50) / 100;  // interior is 8 px wide
-  if (fill) u8g2.drawBox(2, y + 1, fill, 5);
+  // upright battery, 13 px tall, bottom-aligned with the date row: a 3x2
+  // terminal nub on top of a 7x11 body; the fill rises from the bottom
+  u8g2.drawBox(3, 0, 3, 2);                   // terminal nub
+  u8g2.drawFrame(1, 2, 7, 11);                // body (x 1..7, y 2..12)
+  int fh = ((int)vbat_pct * 9 + 50) / 100;    // interior is 9 px tall
+  if (fh) u8g2.drawBox(2, 3 + (9 - fh), 5, fh);
   // percentage next to the icon; even "100" (15 px) ends before the centred
   // date row's worst-case left edge
   char pctStr[5];
   snprintf(pctStr, sizeof(pctStr), "%u", (unsigned)vbat_pct);
   u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(14, DATE_NUM_Y - 1, pctStr);   // baseline: bottom-aligned with the icon
+  u8g2.drawStr(10, DATE_NUM_Y - 1, pctStr);   // baseline: bottom-aligned with the icon
   u8g2.setFont(FONT_DATE);
 }
 #endif
