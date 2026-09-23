@@ -958,9 +958,8 @@ static void draw_battery_icon(const struct tm & t) {
 #endif
   if (!vbat_valid) return;
   if (vbat_pct <= VBAT_LOW_PCT && (t.tm_sec & 1)) return;
-  // upright battery, 13 px tall, bottom-aligned with the date row: a 3x2
-  // terminal nub on top of a 7x11 body; the fill rises from the bottom
-  u8g2.drawBox(3, 0, 3, 2);                   // terminal nub
+  // upright battery, bottom-aligned with the date row: a plain 7x11 body
+  // (no terminal nub); the fill rises from the bottom
   u8g2.drawFrame(1, 2, 7, 11);                // body (x 1..7, y 2..12)
   int fh = ((int)vbat_pct * 9 + 50) / 100;    // interior is 9 px tall
   if (fh) u8g2.drawBox(2, 3 + (9 - fh), 5, fh);
