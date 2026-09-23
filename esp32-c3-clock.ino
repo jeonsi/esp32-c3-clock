@@ -111,7 +111,8 @@ const char* password = WIFI_PASSWORD;
 #define BLE_DUTY_CYCLE       1                    // 1: BLE radio on only around each resync, 0: always on (CYD style)
 #define BLE_LINGER_MS        (60 * 1000)          // UPPER BOUND on-time after a sync (first pairing needs the ANCS prompt)
 #define BLE_SETTLE_MS        (2 * 1000)           // once synced AND ANCS-subscribed, close the window after this instead
-#define BLE_SYNC_TIMEOUT_MS  (3 * 60 * 1000)      // close a fruitless resync window after this, retry next interval
+#define BLE_SYNC_TIMEOUT_MS  (60 * 1000)          // close a fruitless resync window after this (and invert the
+                                                  // source icon right away), retry next interval
 #define SLEEP_ENABLE         1                    // BLE mode: light-sleep between second updates while the radio is
                                                   // off (~20 mA -> ~6 mA; the OLED is the floor). The button wakes
                                                   // the chip instantly (GPIO wakeup), and an OPEN serial monitor
@@ -263,6 +264,7 @@ static bool        time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applie
 static bool        ble_radio_on  = false;
 static uint32_t    ble_window_t0 = 0;             // when the current radio window opened
 static volatile uint32_t last_sync_ok_ms = 0;     // millis() of the last successful sync (0 = none since boot)
+static bool sync_window_failed = false;           // a whole resync window passed with no sync: invert the icon now
 
 // 8x8 status icons for the bottom-left corner (XBM, LSB = leftmost pixel)
 static const uint8_t ICON_BT[8]      = { 0x08, 0x18, 0x26, 0x1C, 0x1C, 0x26, 0x18, 0x08 };
@@ -737,6 +739,7 @@ static void ble_duty_poll(void) {
   if (cts_sync_count != last_count) {
     last_count = cts_sync_count;
     last_sync_ok_ms = millis();
+    sync_window_failed = false;
     if (!synced_ms) synced_ms = millis();
   }
   bool early = synced_ms && ancs_subscribed && !ancs_busy &&
@@ -753,6 +756,7 @@ static void ble_duty_poll(void) {
     ble_time_end();
     ble_radio_on = false;
     next_ms = millis() + NTP_SYNC_INTERVAL_MS;
+    sync_window_failed = true;      // the displayed time is free-running: say so immediately
     Serial.println("BLE: no sync in this window, retrying next interval");
   }
 #else
@@ -975,11 +979,12 @@ static void draw_battery_icon(const struct tm & t) {
 // mode the radio is off most of the time by design (duty cycle) - that idle
 // state shows a steady icon; it only blinks while a window is waiting.
 // Once nothing has synced for SYNC_STALE_MS (counted from boot when no sync
-// has landed yet, e.g. after a soft restart with a still-valid clock) the
-// icon becomes an inverted box: the displayed time is free-running.
+// has landed yet, e.g. after a soft restart with a still-valid clock), or as
+// soon as a whole BLE resync window closes with no sync (sync_window_failed),
+// the icon becomes an inverted box: the displayed time is free-running.
 static void draw_source_icon(const struct tm & t) {
   const uint8_t* icon = time_sync_ble ? ICON_BT : ICON_WIFI;
-  if (millis() - last_sync_ok_ms > SYNC_STALE_MS) {
+  if (sync_window_failed || millis() - last_sync_ok_ms > SYNC_STALE_MS) {
     u8g2.drawBox(0, ICON_Y - 1, 10, 10);
     u8g2.setDrawColor(0);
     u8g2.drawXBM(1, ICON_Y, 8, 8, icon);
