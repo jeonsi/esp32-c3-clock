@@ -1180,12 +1180,14 @@ static void draw_clock(const struct tm & t) {
   // gulim's Hangul glyphs reach 2 px below the baseline (yoff -2) while the
   // DSEG digits sit exactly on it - raise the weekday so the bottoms align.
   // On red days, don't use draw_str_hl: its box is sized from the font's
-  // full ascent, which stacks 3 px of empty box above the glyph (the ink is
-  // only 11 px tall, rows wy-8..wy+2) and makes the letter look low. Hug
-  // the ink with a 1 px pad instead.
+  // full ascent, which stacks empty box above the glyph and makes the
+  // letter look low. Hug the ink with a 1 px pad instead: the weekday ink
+  // spans rows wy-9..wy+1 (verified pixel-for-pixel on the host emulator -
+  // u8g2 puts a glyph's bottom row at y - yoff - 1), so the box is
+  // rows wy-10..wy+2, top-aligned with the DSEG digits.
   const int wy = DATE_NUM_Y - 2;
   if (day_info.red_day) {
-    u8g2.drawBox(x - 1, wy - 9, wd_w + 2, 13);
+    u8g2.drawBox(x - 1, wy - 10, wd_w + 2, 13);
     u8g2.setDrawColor(0);
     u8g2.drawUTF8(x, wy, wd);
     u8g2.setDrawColor(1);
