@@ -1468,6 +1468,11 @@ void setup() {
     Serial.printf("Free heap: %u -> %u after BT release\n",
                   (unsigned)heap_before, (unsigned)ESP.getFreeHeap());
     draw_status("Connecting to Wi-Fi...", "");
+    // Credentials come from secrets.h on every begin(), so don't let the
+    // driver mirror them into NVS in plaintext - this also stops the hourly
+    // duty-cycle reconnects (AP may differ each time) from rewriting NVS.
+    // Must be set BEFORE the first mode()/begin(), which init the driver.
+    WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
     wifi_connect_start();                // async scan -> join the strongest listed AP
   }
