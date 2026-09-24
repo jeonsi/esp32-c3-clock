@@ -106,6 +106,11 @@ const char* password = WIFI_PASSWORD;
 #define NTP_SYNC_INTERVAL_MS (60 * 60 * 1000)     // resync every hour (SNTP and BLE CTS alike)
 #define SYNC_STALE_MS        (NTP_SYNC_INTERVAL_MS + 5UL * 60 * 1000)  // one missed resync (+5 min grace) -> inverted source icon
 #define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
+#define WIFI_DUTY_CYCLE      1                    // Wi-Fi mode: bring the radio up only around each hourly SNTP
+                                                  // resync and power it off in between, enabling light sleep just
+                                                  // like the BLE duty cycle (~25 mA -> ~10 mA). 0 = stay
+                                                  // connected all the time (the old behaviour, no sleep)
+#define WIFI_SYNC_TIMEOUT_MS (60 * 1000)          // close a fruitless Wi-Fi resync window after this (icon inverts)
 #define TIME_SYNC_BLE        0                    // first-boot default source: 1 = BLE CTS, 0 = Wi-Fi SNTP (NVS "tsrc")
 #define BLE_DEVICE_NAME      "ESP32-C3 Clock"     // shown in the iPhone's Bluetooth list
 #define BLE_DUTY_CYCLE       1                    // 1: BLE radio on only around each resync, 0: always on (CYD style)
@@ -264,6 +269,7 @@ static bool        time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applie
 static bool        ble_radio_on  = false;
 static uint32_t    ble_window_t0 = 0;             // when the current radio window opened
 static volatile uint32_t last_sync_ok_ms = 0;     // millis() of the last successful sync (0 = none since boot)
+static volatile uint32_t ntp_sync_count = 0;      // bumped by the SNTP callback (Wi-Fi duty cycle edge detection)
 static bool sync_window_failed = false;           // a whole resync window passed with no sync: invert the icon now
 
 // 8x8 status icons for the bottom-left corner (XBM, LSB = leftmost pixel)
@@ -410,6 +416,7 @@ static void update_day_info(const struct tm & t) {
 void time_sync_notification_cb(struct timeval * tv) {
   (void)tv;
   last_sync_ok_ms = millis();
+  ntp_sync_count++;
   struct tm t;
   time_t now = time(nullptr);
   localtime_r(&now, &t);
@@ -769,13 +776,67 @@ static void ble_duty_poll(void) {
 #endif
 }
 
+// ---- Wi-Fi duty cycle --------------------------------------------------------
+// The Wi-Fi twin of ble_duty_poll: after each SNTP sync the STA is torn down
+// completely (radio off), and one NTP_SYNC_INTERVAL_MS later it reconnects,
+// restarts SNTP for an immediate request, and powers off again on the sync
+// callback. Boot is unchanged (boot_poll owns the first connect + sntp_begin);
+// this only takes over once that first sync has landed. SNTP's smooth slew
+// continues after the radio is off - it is applied by the local clock, not
+// the network. A window that cannot sync (AP away) closes after
+// WIFI_SYNC_TIMEOUT_MS and inverts the source icon, like the BLE path.
+static bool wifi_radio_on = true;   // the STA is up from boot in Wi-Fi mode
+                                    // (stays true forever when WIFI_DUTY_CYCLE is 0)
+
+static void wifi_duty_poll(void) {
+#if WIFI_DUTY_CYCLE
+  static uint32_t seen_count  = 0;    // ntp_sync_count already credited
+  static uint32_t window_t0   = 0;    // when this window opened (0 = the boot window)
+  static uint32_t next_ms     = 0;    // radio off: when to open the next window
+  static bool     sntp_kicked = true; // boot_poll already ran sntp_begin() for the boot window
+  if (!wifi_radio_on) {
+    if ((int32_t)(millis() - next_ms) >= 0) {
+      Serial.println("WiFi: radio on for resync");
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(ssid, password);
+      wifi_radio_on = true;
+      window_t0     = millis();
+      sntp_kicked   = false;
+    }
+    return;
+  }
+  if (!sntp_kicked && WiFi.status() == WL_CONNECTED) {
+    sntp_begin();                     // sntp_restart() inside fires a request right away
+    sntp_kicked = true;
+  }
+  if (ntp_sync_count != seen_count) {
+    seen_count = ntp_sync_count;
+    sync_window_failed = false;
+    WiFi.disconnect(true);            // true = also power the radio off
+    WiFi.mode(WIFI_OFF);
+    wifi_radio_on = false;
+    next_ms = millis() + NTP_SYNC_INTERVAL_MS;
+    Serial.println("WiFi: synced - radio off until the next resync");
+  } else if (boot_state == BOOT_DONE && window_t0 &&
+             millis() - window_t0 >= WIFI_SYNC_TIMEOUT_MS) {
+    // during boot (no valid time yet) the window stays open indefinitely
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    wifi_radio_on = false;
+    next_ms = millis() + NTP_SYNC_INTERVAL_MS;
+    sync_window_failed = true;        // the displayed time is free-running: say so immediately
+    Serial.println("WiFi: no sync in this window, retrying next interval");
+  }
+#endif
+}
+
 // ---- Light sleep ------------------------------------------------------------
-// In BLE mode the radio is off almost all the time, so between one second's
-// frame and the next there is nothing to do: light-sleep until just past the
-// next second boundary. The button pin wakes the chip immediately (its level
-// goes LOW while pressed), and no sleep happens while a gesture may still be
-// in progress, while the radio window is open, while the serial monitor is
-// attached (sleep kills the USB CDC session), or in Wi-Fi mode at all.
+// The radio is off almost all the time (BLE and Wi-Fi duty cycles alike), so
+// between one second's frame and the next there is nothing to do: light-sleep
+// until just past the next second boundary. The button pin wakes the chip
+// immediately (its level goes LOW while pressed), and no sleep happens while
+// a gesture may still be in progress, while a radio window is open, or while
+// a USB host is attached (sleep kills the USB CDC session).
 #if SLEEP_ENABLE
 static uint32_t sleep_backoff_until_ms = 0;   // set when sleeping misbehaves: fall back to 10 ms polling for a while
 static uint32_t slept_us_accum = 0;           // time actually slept since the last frame (SLEEP_DEBUG)
@@ -802,7 +863,7 @@ static bool usb_host_alive(void) {
 static bool sleep_ready(void) {
   // Each gate records why sleep is blocked, so the SLEEP_DEBUG readout can
   // tell "sleep failed" apart from "sleep was never attempted".
-  if (!time_sync_ble || ble_radio_on) { sleep_fail_code = 'w'; return false; }   // Wi-Fi mode / radio window open
+  if (time_sync_ble ? ble_radio_on : wifi_radio_on) { sleep_fail_code = 'w'; return false; }   // radio window open
   if (button_down)                    { sleep_fail_code = 'b'; return false; }
   if (millis() - last_btn_activity_ms < BTN_IDLE_BEFORE_SLEEP_MS) { sleep_fail_code = 'i'; return false; }
   if ((int32_t)(millis() - sleep_backoff_until_ms) < 0) { sleep_fail_code = 'k'; return false; }   // recent failed sleep
@@ -991,8 +1052,8 @@ static void draw_source_icon(const struct tm & t) {
     u8g2.setDrawColor(1);
     return;
   }
-  bool up = time_sync_ble ? (ble_radio_on ? ble_time_connected() : true)
-                          : (WiFi.status() == WL_CONNECTED);
+  bool up = time_sync_ble ? (ble_radio_on  ? ble_time_connected()            : true)
+                          : (wifi_radio_on ? (WiFi.status() == WL_CONNECTED) : true);
   if (!up && (t.tm_sec & 1)) return;
   u8g2.drawXBM(1, ICON_Y, 8, 8, icon);
 }
@@ -1367,6 +1428,7 @@ void loop() {
   vbat_poll();                          // self-throttled to every VBAT_POLL_MS
 #endif
   if (time_sync_ble) ble_duty_poll();   // CTS resync + radio duty cycle
+  else               wifi_duty_poll();  // SNTP resync + radio duty cycle
   if (button_down) {          // the button may be holding SCL low: don't touch the bus until it is released
     delay(10);
     return;
