@@ -839,27 +839,29 @@ static void ble_duty_poll(void) {
 // WIFI_SYNC_TIMEOUT_MS and inverts the source icon, like the BLE path.
 static bool wifi_radio_on = true;   // the STA is up from boot in Wi-Fi mode
                                     // (stays true forever when WIFI_DUTY_CYCLE is 0)
+static uint32_t wifi_window_t0 = 0; // when the current resync window opened (0 = the cold-boot
+                                    // window, which never times out - no valid time yet)
+static bool wifi_sntp_kicked = true;// sntp_begin() already ran for this window (boot_poll owns
+                                    // it on a cold boot; setup clears this on a soft reboot)
 
 static void wifi_duty_poll(void) {
 #if WIFI_DUTY_CYCLE
-  static uint32_t seen_count  = 0;    // ntp_sync_count already credited
-  static uint32_t window_t0   = 0;    // when this window opened (0 = the boot window)
-  static uint32_t next_ms     = 0;    // radio off: when to open the next window
-  static bool     sntp_kicked = true; // boot_poll already ran sntp_begin() for the boot window
+  static uint32_t seen_count = 0;     // ntp_sync_count already credited
+  static uint32_t next_ms    = 0;     // radio off: when to open the next window
   if (!wifi_radio_on) {
     if ((int32_t)(millis() - next_ms) >= 0) {
       Serial.println("WiFi: radio on for resync");
       wifi_connect_start();
-      wifi_radio_on = true;
-      window_t0     = millis();
-      sntp_kicked   = false;
+      wifi_radio_on    = true;
+      wifi_window_t0   = millis();
+      wifi_sntp_kicked = false;
     }
     return;
   }
   wifi_connect_poll();
-  if (!sntp_kicked && WiFi.status() == WL_CONNECTED) {
+  if (!wifi_sntp_kicked && WiFi.status() == WL_CONNECTED) {
     sntp_begin();                     // sntp_restart() inside fires a request right away
-    sntp_kicked = true;
+    wifi_sntp_kicked = true;
   }
   if (ntp_sync_count != seen_count) {
     seen_count = ntp_sync_count;
@@ -869,9 +871,9 @@ static void wifi_duty_poll(void) {
     wifi_radio_on = false;
     next_ms = millis() + NTP_SYNC_INTERVAL_MS;
     Serial.println("WiFi: synced - radio off until the next resync");
-  } else if (boot_state == BOOT_DONE && window_t0 &&
-             millis() - window_t0 >= WIFI_SYNC_TIMEOUT_MS) {
-    // during boot (no valid time yet) the window stays open indefinitely
+  } else if (boot_state == BOOT_DONE && wifi_window_t0 &&
+             millis() - wifi_window_t0 >= WIFI_SYNC_TIMEOUT_MS) {
+    // during a cold boot (no valid time yet) the window stays open indefinitely
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     wifi_radio_on = false;
@@ -1475,6 +1477,23 @@ void setup() {
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
     wifi_connect_start();                // async scan -> join the strongest listed AP
+  }
+
+  // A soft reboot (ESP.restart(), e.g. switching the time source) carries the
+  // system time across, so there is no reason to sit on the "Connecting..."
+  // screen: show the clock right away and let the duty cycle own the first
+  // (re)sync. Its usual rules apply - a window that cannot sync closes after
+  // a minute and inverts the source icon. On a cold boot the time is invalid
+  // and the boot state machine waits for the first sync as before.
+  struct tm t_boot;
+  if (getLocalTime(&t_boot, 0)) {
+    Serial.println("Boot: system time survived a soft reboot - clock up immediately");
+    boot_state = BOOT_DONE;
+    last_drawn_sec = -1;                 // draw the first frame right away
+    if (!time_sync_ble) {
+      wifi_window_t0   = millis();       // a real window: let it time out normally
+      wifi_sntp_kicked = false;          // boot_poll is skipped: the duty poll starts SNTP
+    }
   }
 }
 
