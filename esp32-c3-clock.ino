@@ -37,7 +37,7 @@
 
     Digital (a 128x64 rendition of the CYD digital face, everything centred):
 
-        FRI 9-10                 DSEG14 11px weekday + DSEG7 11px month-day,
+        금 9-10                  굴림 12px Hangul weekday + DSEG7 11px month-day,
                                  weekday inverted on Sunday / public holiday
       P                          DSEG14 11px PM marker (12-hour mode; AM
                                  shows nothing, the space stays reserved)
@@ -222,7 +222,7 @@ static const struct { const char* ssid; const char* pass; } wifi_aps[] =
 // Baselines. Row 1 spans y 0..14, row 3 y 51..63; the 36 px band between
 // them holds the 29 px time centred (y 18..46). The 11 px DSEG digits sit one
 // row lower than the Hangul baseline so they centre on the Hangul body.
-#define DATE_NUM_Y   13                           // date row baseline ("FRI 9-10")
+#define DATE_NUM_Y   13                           // date row baseline ("금 9-10")
 #define TIME_Y       47
 #define AMPM_Y       29                           // A/P marker (y 18..27) top-aligned with the digits, at their left
 #define SEC_Y        47                           // seconds (y 29..46) bottom-aligned with the digits
@@ -266,7 +266,7 @@ static const struct { const char* ssid; const char* pass; } wifi_aps[] =
 // U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(DISPLAY_FLIP ? U8G2_R2 : U8G2_R0, U8X8_PIN_NONE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(DISPLAY_FLIP ? U8G2_R2 : U8G2_R0, U8X8_PIN_NONE);
 
-static const char* const WEEKDAYS_EN[7] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+static const char* const WEEKDAYS_KR[7] = { "일", "월", "화", "수", "목", "금", "토" };
 
 // ---- Faces ----------------------------------------------------------------
 enum face_t { FACE_DIGITAL, FACE_ANALOG, FACE_COUNT };
@@ -1157,11 +1157,11 @@ static void draw_clock(const struct tm & t) {
 
   u8g2.clearBuffer();
 
-  // ---- Row 1: "FRI 9-10", centred - DSEG14 weekday (inverted on red days)
+  // ---- Row 1: "금 9-10", centred - Hangul weekday (inverted on red days)
   // and the month-day without the year or leading zeros
-  const char* wd = WEEKDAYS_EN[t.tm_wday];
+  const char* wd = WEEKDAYS_KR[t.tm_wday];
   snprintf(dateStr, sizeof(dateStr), "%d-%d", t.tm_mon + 1, t.tm_mday);
-  u8g2.setFont(FONT_AMPM);
+  u8g2.setFont(FONT_KO);
   int wd_w = adv_width(wd);
   u8g2.setFont(FONT_DATE);
   int date_w = adv_width(dateStr);
@@ -1176,7 +1176,7 @@ static void draw_clock(const struct tm & t) {
     date_w -= date_lead;
   }
   int x = (SCREEN_W - (wd_w + DATE_GAP + date_w)) / 2;
-  u8g2.setFont(FONT_AMPM);
+  u8g2.setFont(FONT_KO);
   draw_str_hl(x, DATE_NUM_Y, wd, day_info.red_day);
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x + wd_w + DATE_GAP - date_lead, DATE_NUM_Y, dateStr);
