@@ -1178,8 +1178,20 @@ static void draw_clock(const struct tm & t) {
   int x = (SCREEN_W - (wd_w + DATE_GAP + date_w)) / 2;
   u8g2.setFont(FONT_KO);
   // gulim's Hangul glyphs reach 2 px below the baseline (yoff -2) while the
-  // DSEG digits sit exactly on it - raise the weekday so the bottoms align
-  draw_str_hl(x, DATE_NUM_Y - 2, wd, day_info.red_day);
+  // DSEG digits sit exactly on it - raise the weekday so the bottoms align.
+  // On red days, don't use draw_str_hl: its box is sized from the font's
+  // full ascent, which stacks 3 px of empty box above the glyph (the ink is
+  // only 11 px tall, rows wy-8..wy+2) and makes the letter look low. Hug
+  // the ink with a 1 px pad instead.
+  const int wy = DATE_NUM_Y - 2;
+  if (day_info.red_day) {
+    u8g2.drawBox(x - 1, wy - 9, wd_w + 2, 13);
+    u8g2.setDrawColor(0);
+    u8g2.drawUTF8(x, wy, wd);
+    u8g2.setDrawColor(1);
+  } else {
+    u8g2.drawUTF8(x, wy, wd);
+  }
   u8g2.setFont(FONT_DATE);
   u8g2.drawStr(x + wd_w + DATE_GAP - date_lead, DATE_NUM_Y, dateStr);
 #if SLEEP_ENABLE && SLEEP_DEBUG
