@@ -328,7 +328,17 @@ static void wifi_connect_poll(void) {
   switch (wifi_conn_state) {
     case 1: {                          // scanning
       int n = WiFi.scanComplete();
-      if (n == WIFI_SCAN_RUNNING) return;
+      if (n == WIFI_SCAN_RUNNING) {
+        // A scan kicked off while the driver was still coming up (cold boot)
+        // can lose its completion event and report "running" forever - the
+        // one state that had no timeout. Power-cycle the radio and retry.
+        if (millis() - wifi_conn_t0 > 10000) {
+          Serial.println("WiFi: scan stuck, resetting the radio");
+          WiFi.mode(WIFI_OFF);
+          wifi_connect_start();
+        }
+        return;
+      }
       // strongest listed AP that has not failed this round; if every visible
       // one has, clear the mask and let them all have another go
       int best = -1, best_rssi = -128;
