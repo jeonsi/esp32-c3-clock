@@ -300,9 +300,14 @@ static int          wifi_attempts = 0;
 // both visible and in wifi_aps[]. WiFiMulti does the same thing but blocks
 // for seconds during its scan, which would freeze the seconds display, so
 // this is a small state machine polled from the loop instead. When nothing
-// listed is visible (or a join stalls) it rescans after WIFI_RETRY_MS.
+// listed is visible it rescans after WIFI_RETRY_MS; an AP whose join stalls
+// is set aside for the rest of the round (wifi_tried_mask), so the rescan
+// falls back to the next-strongest listed AP instead of hammering the same
+// one - once every visible AP has failed, the round starts over.
 static uint8_t  wifi_conn_state = 0;   // 0 idle, 1 scanning, 2 joining
 static uint32_t wifi_conn_t0    = 0;
+static uint32_t wifi_tried_mask = 0;   // wifi_aps[] entries that failed a join this round
+static int      wifi_join_idx   = -1;  // wifi_aps[] entry currently being joined
 
 static void wifi_connect_start(void) {
   WiFi.mode(WIFI_STA);
@@ -314,23 +319,38 @@ static void wifi_connect_start(void) {
 }
 
 static void wifi_connect_poll(void) {
-  if (WiFi.status() == WL_CONNECTED) { wifi_conn_state = 0; return; }
+  if (WiFi.status() == WL_CONNECTED) {
+    wifi_conn_state = 0;
+    wifi_tried_mask = 0;
+    wifi_join_idx   = -1;
+    return;
+  }
   switch (wifi_conn_state) {
     case 1: {                          // scanning
       int n = WiFi.scanComplete();
       if (n == WIFI_SCAN_RUNNING) return;
+      // strongest listed AP that has not failed this round; if every visible
+      // one has, clear the mask and let them all have another go
       int best = -1, best_rssi = -128;
-      for (int i = 0; i < n; i++)
-        for (size_t j = 0; j < WIFI_AP_COUNT; j++)
-          if (WiFi.SSID(i) == wifi_aps[j].ssid && WiFi.RSSI(i) > best_rssi) {
-            best = (int)j;
-            best_rssi = WiFi.RSSI(i);
-          }
+      for (int pass = 0; pass < 2 && best < 0; pass++) {
+        if (pass == 1) {
+          if (!wifi_tried_mask) break;
+          wifi_tried_mask = 0;
+        }
+        for (int i = 0; i < n; i++)
+          for (size_t j = 0; j < WIFI_AP_COUNT; j++)
+            if (!(wifi_tried_mask & (1UL << j)) && WiFi.SSID(i) == wifi_aps[j].ssid &&
+                WiFi.RSSI(i) > best_rssi) {
+              best = (int)j;
+              best_rssi = WiFi.RSSI(i);
+            }
+      }
       WiFi.scanDelete();
       wifi_conn_t0 = millis();
       if (best >= 0) {
         Serial.printf("WiFi: joining %s (%d dBm)\n", wifi_aps[best].ssid, best_rssi);
         WiFi.begin(wifi_aps[best].ssid, wifi_aps[best].pass);
+        wifi_join_idx   = best;
         wifi_conn_state = 2;
       } else {
         Serial.println("WiFi: no listed AP visible");
@@ -339,7 +359,10 @@ static void wifi_connect_poll(void) {
       break;
     }
     case 2:                            // joining
-      if (millis() - wifi_conn_t0 > 15000) wifi_connect_start();   // join stalled: rescan
+      if (millis() - wifi_conn_t0 > 15000) {   // join stalled: bench this AP, rescan
+        if (wifi_join_idx >= 0) wifi_tried_mask |= (1UL << wifi_join_idx);
+        wifi_connect_start();
+      }
       break;
     default:                           // idle and not connected
       if (millis() - wifi_conn_t0 > WIFI_RETRY_MS) wifi_connect_start();
@@ -851,6 +874,7 @@ static void wifi_duty_poll(void) {
   if (!wifi_radio_on) {
     if ((int32_t)(millis() - next_ms) >= 0) {
       Serial.println("WiFi: radio on for resync");
+      wifi_tried_mask = 0;             // fresh round: every AP gets a chance again
       wifi_connect_start();
       wifi_radio_on    = true;
       wifi_window_t0   = millis();

@@ -40,7 +40,7 @@ ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. �
 
 **Wi-Fi (SNTP)**
 - ESP32 시스템 클럭을 SNTP로 디시플린. 1시간마다 재동기화, `SNTP_SYNC_MODE_SMOOTH`로 시간이 점프하지 않고 서서히 보정
-- **여러 AP 등록 가능**: `secrets.h`에 `WIFI_APS` 목록을 정의하면 스캔해서 **실제로 보이는 AP 중 신호가 가장 센 곳**에 붙습니다(비동기 스캔이라 초침이 멈추지 않음). 목록의 AP가 하나도 안 보이면 30초(`WIFI_RETRY_MS`)마다 재스캔. 기존처럼 `WIFI_SSID`/`WIFI_PASSWORD` 하나만 둬도 동작합니다
+- **여러 AP 등록 가능**: `secrets.h`에 `WIFI_APS` 목록을 정의하면 스캔해서 **실제로 보이는 AP 중 신호가 가장 센 곳**에 붙습니다(비동기 스캔이라 초침이 멈추지 않음). 접속이 15초간 안 되는 AP는 그 라운드에서 제외하고 다음으로 센 AP로 넘어가며, 목록의 AP가 하나도 안 보이면 30초(`WIFI_RETRY_MS`)마다 재스캔. 기존처럼 `WIFI_SSID`/`WIFI_PASSWORD` 하나만 둬도 동작합니다
 - **라디오 듀티사이클**(`WIFI_DUTY_CYCLE`, 기본 켜짐) — BLE 쪽과 같은 방식으로, 동기화가 끝나면 Wi-Fi를 완전히 끄고 1시간 뒤 다시 연결해 SNTP를 받습니다(연결~동기화 수 초). 라디오가 꺼진 사이에는 light sleep이 동작해 **BLE 모드와 같은 ~10mA**가 됩니다. AP가 없어 동기화가 안 되는 창은 1분(`WIFI_SYNC_TIMEOUT_MS`) 뒤 닫고(소스 아이콘 즉시 반전) 다음 주기에 재시도. `WIFI_DUTY_CYCLE 0`이면 종전대로 상시 연결(~25mA, 슬립 없음)
 - NTP 서버: `kr.pool.ntp.org` → `pool.ntp.org` → `time.google.com`, 타임존 `KST-9`
 
