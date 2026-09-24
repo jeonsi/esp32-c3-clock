@@ -96,10 +96,17 @@
 // NTP_SYNC_INTERVAL_MS and BLE_DEVICE_NAME.
 
 // Wi-Fi credentials live in secrets.h (gitignored).
-// Copy secrets.h.example to secrets.h and fill in your own.
+// Copy secrets.h.example to secrets.h and fill in your own. Either a single
+// WIFI_SSID/WIFI_PASSWORD pair, or a WIFI_APS list of several - the clock
+// scans and joins whichever listed AP is actually visible (strongest first).
 #include "secrets.h"
-const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+static const struct { const char* ssid; const char* pass; } wifi_aps[] =
+#ifdef WIFI_APS
+  WIFI_APS;
+#else
+  { { WIFI_SSID, WIFI_PASSWORD } };
+#endif
+#define WIFI_AP_COUNT (sizeof(wifi_aps) / sizeof(wifi_aps[0]))
 
 // ---- Tunables (same values as the CYD clock_config.h) ---------------------
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
@@ -286,8 +293,59 @@ static const uint8_t ICON_SPK_OFF[8] = { 0x08, 0x0E, 0x0F, 0x0F, 0x0F, 0x0F, 0x0
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
 static boot_state_t boot_state = BOOT_WIFI;
 static uint32_t     boot_t0;
-static uint32_t     wifi_attempt_ms;
-static int          wifi_attempts = 1;
+static int          wifi_attempts = 0;
+
+// ---- Multi-AP Wi-Fi connect -------------------------------------------------
+// Non-blocking: kick off an async scan, then join the strongest AP that is
+// both visible and in wifi_aps[]. WiFiMulti does the same thing but blocks
+// for seconds during its scan, which would freeze the seconds display, so
+// this is a small state machine polled from the loop instead. When nothing
+// listed is visible (or a join stalls) it rescans after WIFI_RETRY_MS.
+static uint8_t  wifi_conn_state = 0;   // 0 idle, 1 scanning, 2 joining
+static uint32_t wifi_conn_t0    = 0;
+
+static void wifi_connect_start(void) {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  WiFi.scanNetworks(true);             // async; wifi_connect_poll() picks up the result
+  wifi_conn_state = 1;
+  wifi_conn_t0 = millis();
+  wifi_attempts++;
+}
+
+static void wifi_connect_poll(void) {
+  if (WiFi.status() == WL_CONNECTED) { wifi_conn_state = 0; return; }
+  switch (wifi_conn_state) {
+    case 1: {                          // scanning
+      int n = WiFi.scanComplete();
+      if (n == WIFI_SCAN_RUNNING) return;
+      int best = -1, best_rssi = -128;
+      for (int i = 0; i < n; i++)
+        for (size_t j = 0; j < WIFI_AP_COUNT; j++)
+          if (WiFi.SSID(i) == wifi_aps[j].ssid && WiFi.RSSI(i) > best_rssi) {
+            best = (int)j;
+            best_rssi = WiFi.RSSI(i);
+          }
+      WiFi.scanDelete();
+      wifi_conn_t0 = millis();
+      if (best >= 0) {
+        Serial.printf("WiFi: joining %s (%d dBm)\n", wifi_aps[best].ssid, best_rssi);
+        WiFi.begin(wifi_aps[best].ssid, wifi_aps[best].pass);
+        wifi_conn_state = 2;
+      } else {
+        Serial.println("WiFi: no listed AP visible");
+        wifi_conn_state = 0;           // idle; rescan after WIFI_RETRY_MS
+      }
+      break;
+    }
+    case 2:                            // joining
+      if (millis() - wifi_conn_t0 > 15000) wifi_connect_start();   // join stalled: rescan
+      break;
+    default:                           // idle and not connected
+      if (millis() - wifi_conn_t0 > WIFI_RETRY_MS) wifi_connect_start();
+      break;
+  }
+}
 
 static int          last_drawn_sec = -1;
 
@@ -671,13 +729,7 @@ static void boot_poll(void) {
         boot_state = BOOT_NTP;
         break;
       }
-      if (millis() - wifi_attempt_ms > WIFI_RETRY_MS) {
-        wifi_attempt_ms = millis();
-        wifi_attempts++;
-        Serial.printf("Wi-Fi retry #%d\n", wifi_attempts);
-        WiFi.disconnect();
-        WiFi.begin(ssid, password);
-      }
+      wifi_connect_poll();
       if (millis() - last_ui_ms > 1000) {
         last_ui_ms = millis();
         snprintf(buf, sizeof(buf), "%lus  (try %d)",
@@ -797,14 +849,14 @@ static void wifi_duty_poll(void) {
   if (!wifi_radio_on) {
     if ((int32_t)(millis() - next_ms) >= 0) {
       Serial.println("WiFi: radio on for resync");
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(ssid, password);
+      wifi_connect_start();
       wifi_radio_on = true;
       window_t0     = millis();
       sntp_kicked   = false;
     }
     return;
   }
+  wifi_connect_poll();
   if (!sntp_kicked && WiFi.status() == WL_CONNECTED) {
     sntp_begin();                     // sntp_restart() inside fires a request right away
     sntp_kicked = true;
@@ -1397,7 +1449,7 @@ void setup() {
 #endif
 #endif
 
-  boot_t0 = wifi_attempt_ms = millis();
+  boot_t0 = millis();
   if (time_sync_ble) {
     draw_status("Starting BLE...", "");
     ble_time_begin();
@@ -1416,9 +1468,8 @@ void setup() {
     Serial.printf("Free heap: %u -> %u after BT release\n",
                   (unsigned)heap_before, (unsigned)ESP.getFreeHeap());
     draw_status("Connecting to Wi-Fi...", "");
-    WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
-    WiFi.begin(ssid, password);
+    wifi_connect_start();                // async scan -> join the strongest listed AP
   }
 }
 

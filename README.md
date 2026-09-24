@@ -40,6 +40,7 @@ ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. �
 
 **Wi-Fi (SNTP)**
 - ESP32 시스템 클럭을 SNTP로 디시플린. 1시간마다 재동기화, `SNTP_SYNC_MODE_SMOOTH`로 시간이 점프하지 않고 서서히 보정
+- **여러 AP 등록 가능**: `secrets.h`에 `WIFI_APS` 목록을 정의하면 스캔해서 **실제로 보이는 AP 중 신호가 가장 센 곳**에 붙습니다(비동기 스캔이라 초침이 멈추지 않음). 목록의 AP가 하나도 안 보이면 30초(`WIFI_RETRY_MS`)마다 재스캔. 기존처럼 `WIFI_SSID`/`WIFI_PASSWORD` 하나만 둬도 동작합니다
 - **라디오 듀티사이클**(`WIFI_DUTY_CYCLE`, 기본 켜짐) — BLE 쪽과 같은 방식으로, 동기화가 끝나면 Wi-Fi를 완전히 끄고 1시간 뒤 다시 연결해 SNTP를 받습니다(연결~동기화 수 초). 라디오가 꺼진 사이에는 light sleep이 동작해 **BLE 모드와 같은 ~10mA**가 됩니다. AP가 없어 동기화가 안 되는 창은 1분(`WIFI_SYNC_TIMEOUT_MS`) 뒤 닫고(소스 아이콘 즉시 반전) 다음 주기에 재시도. `WIFI_DUTY_CYCLE 0`이면 종전대로 상시 연결(~25mA, 슬립 없음)
 - NTP 서버: `kr.pool.ntp.org` → `pool.ntp.org` → `time.google.com`, 타임존 `KST-9`
 
@@ -121,7 +122,7 @@ Arduino IDE 기준:
 
 1. **보드**: ESP32 Arduino core 3.x (`esp32:esp32:esp32c3`), **Tools > Partition Scheme > "Huge APP (3MB No OTA/1MB SPIFFS)"** — Wi-Fi와 BLE 두 스택이 모두 빌드에 포함되어 기본 앱 파티션(1.31MB)을 넘습니다
 2. **라이브러리** (Library Manager): `U8g2`, `NimBLE-Arduino` (2.x)
-3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 (`secrets.h`는 gitignore되어 커밋되지 않음. BLE 모드만 쓸 경우에도 파일 자체는 필요)
+3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 — 여러 AP를 쓰려면 `WIFI_APS` 목록으로 (`secrets.h`는 gitignore되어 커밋되지 않음. BLE 모드만 쓸 경우에도 파일 자체는 필요)
 4. 필요 시 스케치 상단의 튜닝 값(타임존, 야간 시간대, 12/24시간·시간 소스 기본값 등) 수정
 5. 파일을 UTF-8로 저장(Arduino IDE 기본값) 후 업로드
 
@@ -179,7 +180,7 @@ U8g2에는 DSEG 폰트가 없고 LVGL 폰트도 읽을 수 없어, **TTF → U8g
 | `VBAT_SHUTDOWN_MV` | 3300 | 이 전압 미만 30초 지속 시 OLED 끄고 deep sleep(1시간마다 재확인). 0 = 사용 안 함 |
 | `BTN_IDLE_BEFORE_SLEEP_MS` | 1.5초 | 버튼 조작 후 이 시간 동안은 슬립하지 않음(제스처 판정 보호) |
 | `SYNC_STALE_MS` | 주기+5분 | 재동기화를 한 번이라도 건너뛰면 소스 아이콘을 반전 표시(Wi-Fi·BLE 공통) |
-| `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
+| `WIFI_RETRY_MS` | 30초 | 등록된 AP가 안 보이거나 접속이 걸렸을 때 재스캔 주기 |
 | `WIFI_DUTY_CYCLE` | 1 | 1이면 Wi-Fi 모드도 동기화 전후에만 라디오를 켬(슬립 가능, ~10mA), 0이면 상시 연결(~25mA) |
 | `WIFI_SYNC_TIMEOUT_MS` | 1분 | 동기화 없이 열려 있는 Wi-Fi 재동기화 창을 닫기까지의 시간(닫힐 때 아이콘 즉시 반전) |
 | `TIME_12H_DEFAULT` | 1 | 첫 부팅 시 12시간제(1)/24시간제(0). 이후 더블 클릭으로 바꾸고 NVS에 저장 |
