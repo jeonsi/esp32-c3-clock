@@ -943,12 +943,19 @@ static char     sleep_fail_code = 0;
 // `if (Serial)` cannot gate sleeping: the HWCDC bool only checks that the TX
 // FIFO is writable, which is true on any power source - a power bank kept it
 // "connected" and blocked sleep forever. A real USB host sends a SOF packet
-// every 1 ms; a charger/power bank never does. Read-and-clear the SOF
-// interrupt's raw status: consecutive calls are >= 10 ms apart, so with a
-// live host the bit is always set again by the next call.
+// every 1 ms; a charger/power bank never does. The SOF *interrupt flag*
+// cannot be used either: in CDC builds the HWCDC ISR services and clears it
+// within 1 ms, so a polled read practically never sees it set (found the
+// hard way - the clock light-slept with a Mac attached, killing the CDC
+// session every second). The FRAM_NUM register instead holds the last SOF's
+// frame index, is read-only and untouched by any ISR: if it changed since
+// the previous call (calls are >= 10 ms apart, frames come every 1 ms), a
+// live host is on the bus.
 static bool usb_host_alive(void) {
-  bool alive = REG_READ(USB_SERIAL_JTAG_INT_RAW_REG) & USB_SERIAL_JTAG_SOF_INT_RAW;
-  REG_WRITE(USB_SERIAL_JTAG_INT_CLR_REG, USB_SERIAL_JTAG_SOF_INT_CLR);
+  static uint32_t prev_idx = 0xFFFFFFFF;   // sentinel: first call reports "alive"
+  uint32_t idx = REG_READ(USB_SERIAL_JTAG_FRAM_NUM_REG) & USB_SERIAL_JTAG_SOF_FRAME_INDEX;
+  bool alive = (idx != prev_idx);
+  prev_idx = idx;
   return alive;
 }
 
