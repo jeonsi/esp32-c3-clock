@@ -112,7 +112,10 @@ static const struct { const char* ssid; const char* pass; } wifi_aps[] =
 #define TZ_INFO              "KST-9"              // POSIX TZ: UTC+9, no DST
 #define NTP_SYNC_INTERVAL_MS (60 * 60 * 1000)     // resync every hour (SNTP and BLE CTS alike)
 #define SYNC_STALE_MS        (NTP_SYNC_INTERVAL_MS + 5UL * 60 * 1000)  // one missed resync (+5 min grace) -> inverted source icon
-#define WIFI_RETRY_MS        (30 * 1000)          // re-issue WiFi.begin() every 30 s
+#define WIFI_RETRY_MS        (10 * 1000)          // rescan this often when no listed AP was visible. A scan fired
+                                                  // right after the radio comes up sometimes returns empty, and a
+                                                  // 30 s pause ate most of the 60 s resync window - 10 s keeps
+                                                  // 4-5 scan chances per window
 #define WIFI_DUTY_CYCLE      1                    // Wi-Fi mode: bring the radio up only around each hourly SNTP
                                                   // resync and power it off in between, enabling light sleep just
                                                   // like the BLE duty cycle (~25 mA -> ~10 mA). 0 = stay
