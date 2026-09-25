@@ -186,7 +186,8 @@ static const struct { const char* ssid; const char* pass; } wifi_aps[] =
 #define VBAT_GND_PIN         0                    // divider bottom (like SPK_GND_PIN): a GPIO held LOW as a
                                                   // virtual ground - only 21 uA flows, <1 mV off true GND - so
                                                   // the single GND pin stays with the OLED. -1 = wired to real GND
-#define VBAT_DIV             2.028f               // divider ratio (Vbat/Vpin), trimmed against a multimeter:
+#define VBAT_DIV             2.0f                 // divider ratio (Vbat/Vpin)
+// #define VBAT_DIV             2.028f               // divider ratio (Vbat/Vpin), trimmed against a multimeter:
                                                   // 2.00 x 3938 (measured) / 3883 (displayed at 2.00)
 #define BATTERY_DEBUG        0                    // 1: show the measured battery millivolts top-left in place of
                                                   //    the icon (VBAT_DIV calibration / wiring diagnosis),
