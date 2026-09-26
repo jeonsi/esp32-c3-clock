@@ -121,7 +121,7 @@ ESP32-C3와 0.96" 128×64 OLED(SH1106/SSD1306, I2C)로 만든 시계입니다. �
 
 Arduino IDE 기준:
 
-1. **보드**: ESP32 Arduino core 3.x (`esp32:esp32:esp32c3`), **Tools > Partition Scheme > "Huge APP (3MB No OTA/1MB SPIFFS)"** — Wi-Fi와 BLE 두 스택이 모두 빌드에 포함되어 기본 앱 파티션(1.31MB)을 넘습니다
+1. **보드**: ESP32 Arduino core 3.x (`esp32:esp32:esp32c3`), **Tools > Partition Scheme > "Huge APP (3MB No OTA/1MB SPIFFS)"** — Wi-Fi와 BLE 두 스택이 모두 빌드에 포함되어 기본 앱 파티션(1.31MB)을 넘습니다. **Tools > USB CDC On Boot > "Enabled"** — 꺼져 있으면 `Serial`이 UART0으로 가서 로그가 USB로 안 나오고, UART0 TX가 하필 부저 가상 GND 핀(GPIO21)이라 겹칩니다
 2. **라이브러리** (Library Manager): `U8g2`, `NimBLE-Arduino` (2.x)
 3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 — 여러 AP를 쓰려면 `WIFI_APS` 목록으로 (`secrets.h`는 gitignore되어 커밋되지 않음. BLE 모드만 쓸 경우에도 파일 자체는 필요)
 4. 필요 시 스케치 상단의 튜닝 값(타임존, 야간 시간대, 12/24시간·시간 소스 기본값 등) 수정
